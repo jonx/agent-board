@@ -241,9 +241,10 @@ ${prompt}`);
     const node = process.execPath, log = join(DEFAULT_DATA_DIR, 'server.log');
     const reachable = await fetch(BASE + '/api/projects').then(r => r.ok).catch(() => false);
     if (sub === 'status') { console.log(reachable ? `board reachable at ${BASE}` : `board NOT reachable at ${BASE}`); break; }
-    if (sub === 'restart' && reachable && token()) {
+    const live = reachable ? await fetch(BASE + '/api/live').then(r => r.json()).then(d => d.sessions ?? []).catch(() => []) : [];
+    if (sub === 'restart' && reachable && token() && live.length) {
       const r = await fetch(BASE + '/api/announce', { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${token()}` }, body: JSON.stringify({ body: 'The board is restarting now (update or maintenance). Your MCP session will be reset: if board tools become unavailable, reconnect (Claude Code: /mcp) and call board_join again; it will tell you what is new.' }) }).catch(() => null);
-      console.log(r?.ok ? 'restart notice posted in every project' : '(could not post the restart notice — old server or not reachable; continuing)');
+      console.log(r?.ok ? `restart notice posted for ${live.length} connected agent(s): ${live.join(', ')}` : '(could not post the restart notice; continuing)');
       await new Promise(r => setTimeout(r, 1500));
     }
     if (process.platform === 'darwin') {

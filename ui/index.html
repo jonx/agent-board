@@ -58,6 +58,7 @@
   <button id="newProject">+ project</button>
   <button id="newThread" disabled>+ thread</button>
   <span class="sp"></span>
+  <button id="copyLink" title="copy a link to what you are looking at">🔗 link</button>
   <button id="readAll" title="mark everything as seen">mark all seen</button>
   <button id="verify" title="verify the message hash chain">verify log</button>
   <span class="tok" id="tok">no human token — read-only</span>
@@ -122,7 +123,23 @@ const render = (src) => {
 
 // ---- human token ----
 let token = null;
-try { const h = new URLSearchParams(location.hash.slice(1)); if (h.get('token')) { localStorage.setItem('board_token', h.get('token')); history.replaceState(null, '', location.pathname); } token = localStorage.getItem('board_token'); } catch {}
+// The token may arrive as #token=… ; store it and drop it from the URL immediately so a
+// copied link never carries the secret. Position then lives in the hash: #/<project>[/<thread>]
+let bootHash = location.hash.slice(1);
+try {
+  if (bootHash.startsWith('token=')) { localStorage.setItem('board_token', bootHash.slice(6)); bootHash = ''; history.replaceState(null, '', location.pathname); }
+  token = localStorage.getItem('board_token');
+} catch {}
+const parseHash = (h = location.hash.slice(1)) => {
+  const m = /^\/([^/]+)(?:\/(\d+))?/.exec(h);
+  return m ? { project: decodeURIComponent(m[1]), thread: m[2] ? Number(m[2]) : null } : { project: null, thread: null };
+};
+let applyingHash = false;
+function updateHash() {
+  const name = S.projects.find(p => p.id === S.project)?.name;
+  const h = name ? `#/${encodeURIComponent(name)}${S.thread ? '/' + S.thread : ''}` : '';
+  if (!applyingHash && location.hash !== h) history.replaceState(null, '', location.pathname + h);
+}
 if (token) { $('#tok').textContent = 'human'; $('#tok').classList.add('ok'); }
 const api = async (path, body) => {
   const r = await fetch(path, body ? { method: 'POST', headers: { 'content-type': 'application/json', ...(token ? { authorization: 'Bearer ' + token } : {}) }, body: JSON.stringify(body) } : {});
@@ -146,6 +163,8 @@ const teamKey = () => 'team' + S.project;
 // ---- state ----
 const S = { projects: [], project: null, filter: 'attention', threads: [], thread: null, messages: [], detail: null, agents: [] };
 try { S.project = Number(localStorage.getItem('board_project')) || null; } catch {}
+try { S.filter = localStorage.getItem('board_filter') || 'attention'; } catch {}
+const BOOT = parseHash(bootHash || location.hash.slice(1));
 
 async function loadProjects() {
   const [projects, agents, index] = await Promise.all([api('/api/projects'), api('/api/agents'), api('/api/threads-index')]);
@@ -154,21 +173,24 @@ async function loadProjects() {
   S.unreadByProject = {};
   S.unreadThreads = new Set(index.filter(isUnread).map(t => t.id));
   for (const t of index) if (isUnread(t)) S.unreadByProject[t.project_id] = (S.unreadByProject[t.project_id] ?? 0) + 1;
-  const el = $('#projects');
+  const el = $('#projects'), asideTop = el.parentElement === document.body ? 0 : el.scrollTop;
   el.innerHTML = S.projects.map(p => {
     const n = S.unreadByProject[p.id] ?? 0;
     return `<div class="item ${p.id === S.project ? 'sel' : ''} ${n ? 'unread' : ''}" data-id="${p.id}"><div class="t"><span class="title">${esc(p.name)}</span>${n ? `<span class="count" title="${n} thread(s) waiting on you">${n}</span>` : ''}${p.awaiting_human ? `<span class="badge h">${p.awaiting_human} waiting</span>` : ''}</div><div class="m">${p.open_threads} active${p.archived ? ' · archived' : ''}</div></div>`;
   }).join('') || '<div class="empty">No project yet.<br>One is created when the first agent connects.</div>';
+  el.scrollTop = asideTop;
   el.querySelectorAll('.item').forEach(i => i.onclick = () => selectProject(Number(i.dataset.id)));
   $('#newThread').disabled = !S.project || !token;
   const totalWaiting = S.projects.reduce((n, p) => n + p.awaiting_human, 0);
   const totalUnread = Object.values(S.unreadByProject).reduce((a, b) => a + b, 0);
   document.title = (totalWaiting ? `(${totalWaiting}!) ` : totalUnread ? `(${totalUnread}) ` : '') + 'agent-board';
+  if (BOOT.project) { const p = S.projects.find(x => x.name === BOOT.project); const t = BOOT.thread; BOOT.project = null; BOOT.thread = null; if (p) { await selectProject(p.id); if (t) await openThread(t); return; } }
   if (S.project && !S.projects.some(p => p.id === S.project)) S.project = null;
   if (!S.project && S.projects[0]) return selectProject(S.projects[0].id);
+  updateHash();
   if (S.project) await loadThreads();
 }
-async function selectProject(id) { S.project = id; try { localStorage.setItem('board_project', id); } catch {} S.thread = null; $('#thread').innerHTML = '<div class="empty">Pick a thread.</div>'; await loadProjects(); }
+async function selectProject(id) { S.project = id; try { localStorage.setItem('board_project', id); } catch {} S.thread = null; $('#thread').innerHTML = '<div class="empty">Pick a thread.</div>'; await loadProjects(); updateHash(); }
 
 const ACTIVE = new Set(['open', 'awaiting_human', 'changes_requested']);
 const needsMe = (t) => (t.attention ?? 'ambient') !== 'ambient';
@@ -184,7 +206,9 @@ async function loadThreads() {
     b.innerHTML = label + (n ? `<span class="n">${n}</span>` : '');
     b.title = n ? `${n} thread(s) waiting on you` : '';
   }
-  if (S.filter === 'team') return renderTeam();
+  const sec = $('#threads').parentElement, secTop = sec.scrollTop;
+  const restore = () => { sec.scrollTop = secTop; };
+  if (S.filter === 'team') { await renderTeam(); return restore(); }
   const can = !!token;
   const list = lists[S.filter];
   S.threads = list;
@@ -194,6 +218,7 @@ async function loadThreads() {
       ${t.acks?.length ? `<div class="acks">${ackChips(t.acks)}</div>` : ''}
       ${can && t.status === 'awaiting_human' ? `<div class="decide" data-for="${t.id}"><input class="why" placeholder="optional note"><button class="ok" data-d="approve">ok</button><button class="bad" data-d="reject">non</button></div>` : ''}</div>`).join('')
     || `<div class="empty">${S.filter === 'attention' ? 'Nothing needs you right now.' : 'No threads.'}</div>`;
+  restore();
   $('#threads').querySelectorAll('.item').forEach(i => i.onclick = (e) => { if (e.target.closest('.decide')) return; openThread(Number(i.dataset.id)); });
   $('#threads').querySelectorAll('.decide').forEach(d => {
     d.onclick = (e) => e.stopPropagation();
@@ -226,6 +251,14 @@ async function renderTeam() {
 }
 
 async function openThread(id) {
+  const art = $('#thread');
+  const same = S.thread === id;
+  // Remember where the reader is and what they were typing: a message arriving elsewhere
+  // must never move the page under them or wipe a draft.
+  const prevTop = art.scrollTop;
+  const wasAtBottom = art.scrollHeight - art.scrollTop - art.clientHeight < 40;
+  const draft = same ? ($('#body')?.value ?? '') : '';
+  const hadFocus = same && document.activeElement === $('#body');
   S.thread = id;
   const { thread: t, messages, acks, read_by } = await api(`/api/threads/${id}`);
   S.messages = messages;
@@ -250,7 +283,9 @@ async function openThread(id) {
       <div class="actions"><button id="send" class="on">Post</button>
         <span class="sp"></span>
         <button class="ok" data-v="approve">Approve</button><button class="warn" data-v="request_changes">Request changes</button><button class="bad" data-v="reject">Reject</button></div></div>` : ''}`;
-  $('#thread .msgs').scrollIntoView(false);
+  if (!same || wasAtBottom) art.scrollTop = art.scrollHeight; else art.scrollTop = prevTop;
+  if (draft && $('#body')) { $('#body').value = draft; if (hadFocus) { $('#body').focus(); $('#body').setSelectionRange(draft.length, draft.length); } }
+  updateHash();
   loadThreads();
   if (!can) return;
   const post = async (verdict) => {
@@ -270,7 +305,24 @@ async function openThread(id) {
 }
 
 // ---- header actions ----
-document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => { document.querySelectorAll('.tabs button').forEach(x => x.classList.remove('on')); b.classList.add('on'); S.filter = b.dataset.f; loadThreads(); });
+document.querySelectorAll('.tabs button').forEach(b => {
+  if (b.dataset.f === S.filter) { document.querySelectorAll('.tabs button').forEach(x => x.classList.remove('on')); b.classList.add('on'); }
+  b.onclick = () => { document.querySelectorAll('.tabs button').forEach(x => x.classList.remove('on')); b.classList.add('on'); S.filter = b.dataset.f; try { localStorage.setItem('board_filter', S.filter); } catch {} loadThreads(); };
+});
+window.addEventListener('hashchange', async () => {   // back / forward buttons
+  const h = parseHash(); if (!h.project) return;
+  const p = S.projects.find(x => x.name === h.project); if (!p) return;
+  applyingHash = true;
+  if (p.id !== S.project) { S.project = p.id; try { localStorage.setItem('board_project', p.id); } catch {} await loadProjects(); }
+  if (h.thread && h.thread !== S.thread) await openThread(h.thread); else if (!h.thread) { S.thread = null; $('#thread').innerHTML = '<div class="empty">Pick a thread.</div>'; }
+  applyingHash = false;
+});
+$('#copyLink').onclick = async (e) => {
+  updateHash();
+  const url = location.href;
+  try { await navigator.clipboard.writeText(url); } catch { const ta = document.createElement('textarea'); ta.value = url; document.body.append(ta); ta.select(); document.execCommand('copy'); ta.remove(); }
+  const b = e.currentTarget, old = b.textContent; b.textContent = '✓ copied'; setTimeout(() => { b.textContent = old; }, 1200);
+};
 $('#readAll').onclick = async () => { await api('/api/read-all', {}); await loadProjects(); };
 $('#verify').onclick = async () => { const v = await api('/api/verify'); alert(v.ok ? `Log intact: ${v.checked} messages verified.` : `LOG TAMPERED at message #${v.broken_at}`); };
 $('#newThread').onclick = () => $('#dlgThread').showModal();
@@ -313,16 +365,16 @@ function connect() {
   const es = new EventSource('/api/stream');
   es.onopen = () => $('#live').classList.add('live');
   es.onerror = () => { $('#live').classList.remove('live'); es.close(); setTimeout(connect, 2000); };
-  let timer = null;
+  let timer = null, touched = false;
   es.addEventListener('change', (e) => {
     const ev = JSON.parse(e.data);
+    if (ev.threadId && ev.threadId === S.thread) touched = true;   // only reload the open thread if IT changed
     clearTimeout(timer);
     timer = setTimeout(async () => {
+      const reload = touched; touched = false;
       await loadProjects();
-      if (S.thread && (ev.threadId === S.thread || ev.type !== 'message')) {
-        const atBottom = true; await openThread(S.thread); if (atBottom) window.scrollTo(0, document.body.scrollHeight);
-      }
-    }, 150);
+      if (reload && S.thread) await openThread(S.thread);
+    }, 200);
   });
 }
 loadProjects().then(connect);

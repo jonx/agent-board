@@ -122,6 +122,7 @@ export function createHttpServer({ store, humanToken, uiFile, registry = new Ses
       }
       if (p === '/api/verify') return json(res, 200, store.verifyChain());
       if (p === '/api/version') return json(res, 200, { version: store.getMeta('board_version') });
+      if (p === '/api/live') return json(res, 200, { sessions: [...registry.sessions.values()].filter(e => e.agentName && Date.now() - e.lastSeen < registry.ttl).map(e => e.agentName) });
       if (p === '/api/events') return json(res, 200, store.listEvents(q.get('project_id') ? id(q.get('project_id')) : null, Number(q.get('limit') ?? 100)));
       if (p === '/api/inbox') { // peek for agent-side hooks: /api/inbox?project=x&agent=y
         const a = store.getAgent(q.get('agent') ?? ''), pr = store.getProject(q.get('project') ?? '');
