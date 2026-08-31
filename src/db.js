@@ -118,6 +118,15 @@ CREATE TABLE IF NOT EXISTS reactions (
 );
 CREATE INDEX IF NOT EXISTS reactions_thread ON reactions(thread_id, id);
 
+-- Where the human has read up to, per thread. Their own bookkeeping: it hides nothing
+-- (every message stays readable forever) and only the token-protected API can write it,
+-- so no agent can mark things read on their behalf.
+CREATE TABLE IF NOT EXISTS human_reads (
+  thread_id            INTEGER PRIMARY KEY REFERENCES threads(id),
+  last_read_message_id INTEGER NOT NULL DEFAULT 0,
+  at                   TEXT NOT NULL
+);
+
 -- Key/value store for server state (e.g. last board version seen).
 CREATE TABLE IF NOT EXISTS meta (
   key   TEXT PRIMARY KEY,

@@ -162,10 +162,14 @@ export class Store {
         (SELECT max(m.id) FROM messages m JOIN agents a ON a.id = m.author_id WHERE m.thread_id = t.id AND a.role = 'human') AS human_last_id,
         (SELECT a.role FROM messages m JOIN agents a ON a.id = m.author_id WHERE m.thread_id = t.id ORDER BY m.id DESC LIMIT 1) AS last_author_role,
         (SELECT m.kind FROM messages m WHERE m.thread_id = t.id ORDER BY m.id DESC LIMIT 1) AS last_kind,
+        COALESCE((SELECT hr.last_read_message_id FROM human_reads hr WHERE hr.thread_id = t.id), 0) AS human_read_id,
         (SELECT count(*) FROM messages m WHERE m.thread_id = t.id AND m.kind <> 'system' AND m.mentions LIKE '%"human"%'
            AND m.id > COALESCE((SELECT max(m2.id) FROM messages m2 JOIN agents a2 ON a2.id = m2.author_id WHERE m2.thread_id = t.id AND a2.role = 'human'), 0)) AS mentions_human
       FROM threads t JOIN projects p ON p.id = t.project_id WHERE p.archived = 0`).all()
-      .map(t => ({ ...t, attention: attentionOf(t) }));
+      .map(t => {
+        const attention = attentionOf(t);
+        return { ...t, attention, unread_for_human: attention !== 'ambient' && (t.last_message_id ?? 0) > t.human_read_id };
+      });
   }
 
   /** Project-wide feed (for the human UI/hooks): messages after sinceId. */
@@ -256,6 +260,7 @@ export class Store {
       this.db.exec('COMMIT');
     } catch (e) { this.db.exec('ROLLBACK'); throw e; }
     if (actor.role !== 'human') this.markRead(actor, thread.project_id, id); // your own post is read
+    else this.markHumanRead(threadId, id);
     if (newStatus) this.event('thread.status', { agentId: actor.id, projectId: thread.project_id, threadId, data: { status: newStatus, via: implied ? 'one-word reply' : 'verdict' } });
     this.emit('message', { projectId: thread.project_id, threadId, messageId: id, authorId: actor.id, authorRole: actor.role });
     return { id, status: newStatus ?? thread.status, advisory, ...(implied ? { implied_verdict: implied } : {}) };
@@ -290,6 +295,21 @@ export class Store {
     this.emit('thread', { projectId: thread.project_id, threadId });
   }
 
+  // ---------- the human's read state (server-side, so UI, CLI and scripts agree) ----------
+  markHumanRead(threadId, upToId = null) {
+    const last = upToId ?? this.db.prepare(`SELECT COALESCE(max(id), 0) AS id FROM messages WHERE thread_id = ?`).get(threadId).id;
+    this.db.prepare(`INSERT INTO human_reads (thread_id, last_read_message_id, at) VALUES (?,?,?)
+      ON CONFLICT(thread_id) DO UPDATE SET last_read_message_id = max(last_read_message_id, excluded.last_read_message_id), at = excluded.at`)
+      .run(threadId, last, now());
+    this.emit('human_read', { threadId, upTo: last });
+    return { thread_id: threadId, read_up_to: last };
+  }
+  markAllHumanRead(projectId = null) {
+    const rows = this.threadsIndex().filter(t => (!projectId || t.project_id === projectId) && t.last_message_id);
+    for (const t of rows) this.markHumanRead(t.id, t.last_message_id);
+    return rows.length;
+  }
+
   // ---------- acknowledgements ----------
   /** Say where you stand on a thread without writing a message. Latest state per agent wins. */
   react(actor, threadId, state, note = null) {
@@ -298,6 +318,7 @@ export class Store {
     if (!thread) throw new BoardError('not_found', `thread ${threadId} not found`);
     this.assertCanAct(actor, thread.project_id, thread);
     if (note && note.length > 200) note = note.slice(0, 200);
+    if (actor.role === 'human') this.markHumanRead(threadId);
     this.db.prepare(`INSERT INTO reactions (thread_id, project_id, agent_id, state, note, created_at) VALUES (?,?,?,?,?,?)`)
       .run(threadId, thread.project_id, actor.id, state, note, now());
     // Acknowledging a thread means you have seen what is in it.

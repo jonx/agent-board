@@ -58,6 +58,7 @@
   <button id="newProject">+ project</button>
   <button id="newThread" disabled>+ thread</button>
   <span class="sp"></span>
+  <button id="readAll" title="mark everything as seen">mark all seen</button>
   <button id="verify" title="verify the message hash chain">verify log</button>
   <span class="tok" id="tok">no human token — read-only</span>
 </header>
@@ -137,9 +138,9 @@ const ackChips = (acks) => (acks ?? []).map(a => `<span class="ack" title="${esc
 // ---- what the human has already seen (per browser) ----
 const READ = (() => { try { return JSON.parse(localStorage.getItem('board_read') || '{}'); } catch { return {}; } })();
 const saveRead = () => { try { localStorage.setItem('board_read', JSON.stringify(READ)); } catch {} };
-// "Unread" means: this thread asks something of you AND you have not opened it since.
+// "Unread" = this thread asks something of you and you have not opened it since (server-side).
 // Agent-to-agent chatter, journals, context and board notices are ambient — never badged.
-const isUnread = (t) => (t.attention ?? 'ambient') !== 'ambient' && (t.last_message_id ?? 0) > (READ['t' + t.id] ?? 0);
+const isUnread = (t) => !!t.unread_for_human;
 const teamKey = () => 'team' + S.project;
 
 // ---- state ----
@@ -149,8 +150,9 @@ try { S.project = Number(localStorage.getItem('board_project')) || null; } catch
 async function loadProjects() {
   const [projects, agents, index] = await Promise.all([api('/api/projects'), api('/api/agents'), api('/api/threads-index')]);
   S.projects = projects; S.agents = agents;
-  // Same definition of "unread" as the tabs: a thread whose last message the human has not opened.
+  // Server decides what is unread (same answer for the UI, the CLI and the scripts).
   S.unreadByProject = {};
+  S.unreadThreads = new Set(index.filter(isUnread).map(t => t.id));
   for (const t of index) if (isUnread(t)) S.unreadByProject[t.project_id] = (S.unreadByProject[t.project_id] ?? 0) + 1;
   const el = $('#projects');
   el.innerHTML = S.projects.map(p => {
@@ -174,10 +176,11 @@ async function loadThreads() {
   if (!S.project) return;
   const [all, detail] = await Promise.all([api(`/api/projects/${S.project}/threads?limit=200`), api(`/api/projects/${S.project}`)]);
   S.detail = detail;
+  const unread = (t) => S.unreadThreads?.has(t.id);
   const lists = { attention: all.filter(needsMe), active: all.filter(t => ACTIVE.has(t.status)), all };
   for (const b of document.querySelectorAll('.tabs button')) {
     const f = b.dataset.f, label = b.dataset.label ?? (b.dataset.label = b.textContent.trim());
-    const n = f === 'attention' ? lists.attention.filter(isUnread).length : 0;   // only this tab ever badges
+    const n = f === 'attention' ? lists.attention.filter(unread).length : 0;   // only this tab ever badges
     b.innerHTML = label + (n ? `<span class="n">${n}</span>` : '');
     b.title = n ? `${n} thread(s) waiting on you` : '';
   }
@@ -185,7 +188,7 @@ async function loadThreads() {
   const can = !!token;
   const list = lists[S.filter];
   S.threads = list;
-  $('#threads').innerHTML = list.map(t => `<div class="item ${t.id === S.thread ? 'sel' : ''} ${isUnread(t) ? 'unread' : ''}" data-id="${t.id}">
+  $('#threads').innerHTML = list.map(t => `<div class="item ${t.id === S.thread ? 'sel' : ''} ${unread(t) ? 'unread' : ''}" data-id="${t.id}">
       <div class="t"><span class="badge k">${t.kind}</span><span class="title" title="${esc(t.title)}">${esc(t.title)}</span></div>
       <div class="m"><span class="badge ${t.status}">${t.status.replace('_', ' ')}</span>${t.paused_reason ? '<span class="badge paused">paused</span>' : ''}<span>${esc(t.created_by_name)}</span><span>${t.message_count} msg</span><span>${fmt(t.updated_at)}</span></div>
       ${t.acks?.length ? `<div class="acks">${ackChips(t.acks)}</div>` : ''}
@@ -197,7 +200,7 @@ async function loadThreads() {
     d.querySelectorAll('[data-d]').forEach(b => b.onclick = async () => {
       const v = b.dataset.d, note = d.querySelector('.why').value.trim() || (v === 'approve' ? 'ok' : 'non');
       await api(`/api/threads/${d.dataset.for}/messages`, { body: note, verdict: v });
-      READ['t' + d.dataset.for] = 1e15; saveRead(); loadThreads(); loadProjects();
+      await api(`/api/threads/${d.dataset.for}/read`, {}); loadThreads(); loadProjects();
     });
   });
 }
@@ -226,8 +229,9 @@ async function openThread(id) {
   S.thread = id;
   const { thread: t, messages, acks, read_by } = await api(`/api/threads/${id}`);
   S.messages = messages;
-  if (messages.length) { READ['t' + id] = messages[messages.length - 1].id; saveRead(); }
+  if (messages.length && token) await api(`/api/threads/${id}/read`, { up_to: messages[messages.length - 1].id });
   document.querySelector(`#threads .item[data-id="${id}"]`)?.classList.remove('unread');
+  S.unreadThreads?.delete(id);
   loadProjects();
   $('#threads').querySelectorAll('.item').forEach(i => i.classList.toggle('sel', Number(i.dataset.id) === id));
   const can = !!token;
@@ -267,6 +271,7 @@ async function openThread(id) {
 
 // ---- header actions ----
 document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => { document.querySelectorAll('.tabs button').forEach(x => x.classList.remove('on')); b.classList.add('on'); S.filter = b.dataset.f; loadThreads(); });
+$('#readAll').onclick = async () => { await api('/api/read-all', {}); await loadProjects(); };
 $('#verify').onclick = async () => { const v = await api('/api/verify'); alert(v.ok ? `Log intact: ${v.checked} messages verified.` : `LOG TAMPERED at message #${v.broken_at}`); };
 $('#newThread').onclick = () => $('#dlgThread').showModal();
 $('#dlgThread form').onsubmit = async (e) => {

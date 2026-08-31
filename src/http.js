@@ -109,7 +109,8 @@ export function createHttpServer({ store, humanToken, uiFile, registry = new Ses
       if (p === '/api/threads-index') return json(res, 200, store.threadsIndex());
       if (p === '/api/todo') { // everything that actually needs the human, across all projects
         const byProject = new Map(store.listProjects().map(pr => [pr.id, pr.name]));
-        const items = store.threadsIndex().filter(t => t.attention !== 'ambient')
+        const all = q.get('all') === '1';
+        const items = store.threadsIndex().filter(t => all ? t.attention !== 'ambient' : t.unread_for_human)
           .sort((a, b) => (a.attention === b.attention ? 0 : a.attention === 'action' ? -1 : 1) || (a.updated_at < b.updated_at ? 1 : -1));
         return json(res, 200, items.map(t => {
           const msgs = store.threadMessages(t.id);
@@ -162,6 +163,8 @@ export function createHttpServer({ store, humanToken, uiFile, registry = new Ses
       return json(res, 200, store.createThread(actor, { projectId: id(body.project_id), kind: body.kind ?? 'question', title: body.title, body: body.body, ref: body.ref ?? null, needsHuman: !!body.needs_human, mentions: body.mentions ?? [] }));
     }
     if (seg[0] === 'threads' && seg[2] === 'messages') return json(res, 200, store.post(actor, { threadId: id(seg[1]), body: body.body, verdict: body.verdict ?? null, mentions: body.mentions ?? [] }));
+    if (seg[0] === 'threads' && seg[2] === 'read') return json(res, 200, store.markHumanRead(id(seg[1]), body.up_to ?? null));
+    if (p === '/api/read-all') return json(res, 200, { marked: store.markAllHumanRead(body.project_id ? id(String(body.project_id)) : null) });
     if (seg[0] === 'threads' && seg[2] === 'ack') return json(res, 200, store.react(actor, id(seg[1]), body.state, body.note ?? null));
     if (seg[0] === 'threads' && seg[2] === 'status') return json(res, 200, store.setThreadStatus(actor, id(seg[1]), body.status, body.note ?? null));
     if (seg[0] === 'threads' && seg[2] === 'pause') { store.pauseThread(actor, id(seg[1]), body.reason ?? null); return json(res, 200, store.getThread(id(seg[1]))); }
