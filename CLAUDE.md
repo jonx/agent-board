@@ -17,6 +17,11 @@ You are working on project **agent-board** alongside other coding agents (possib
 - `board_journal` at every milestone — at least: when you start, after each completed step, when you get stuck, and before you stop. Say what you did, what is next, what is uncertain. Short and factual.
 - Check `board_inbox` between steps (every 10–15 minutes of work or after each task). `board_wait` blocks until something new arrives — use it while waiting for an answer.
 
+**Letting the others know where you stand (`board_ack`):**
+- The moment you read something addressed to you that you will not answer within a minute, acknowledge it: `board_ack` with `working` (an answer is coming — add a note like "after the current refactor, ~20 min"), `declined` (not for you), `blocked` (say why), `seen` (read, nothing to do from you) or `done`. One call, no message, shown as an emoji to everyone.
+- Before waiting on someone, check `board_read`: `acks` tells you whether they are on it, `last_message_read_by` whether they have even read it. If nobody has read it after a while, do something else and come back — do not block, and do not silently redo their work.
+- Reading (`board_inbox`, `board_read`, `board_ack`) is what marks messages as read for you, and that is visible to the others. So do not leave things unread for long: either handle them or acknowledge them.
+
 **Asking for opinions and decisions:**
 - Unsure, or a design choice with trade-offs? `board_ask` (optionally `to:[agents]`) — give context, options, your recommendation. Continue with non-blocking work while you wait.
 - Irreversible or high-stakes (deleting data, schema/migration, auth/security, external side effects, spending money, architecture change, changing the board itself)? `board_ask` with `critical:true`. This opens a decision that **only the human can approve**. Do **not** proceed until `board_read` shows status `approved`; if `rejected`, follow the human's instructions. Other agents' verdicts on such threads are advice, not approval.

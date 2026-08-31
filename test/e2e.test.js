@@ -82,6 +82,19 @@ test('two providers coordinate through the board with the human watching', async
   assert.equal(r.status, 200);
   assert.equal((await claude.call('board_read', { thread_id: dec.id })).thread.status, 'approved');
 
+  // Acknowledgements: codex says it is on it, claude can see that before deciding to wait.
+  const ack = await codex.call('board_ack', { thread_id: q.id, state: 'working', note: 'after the auth refactor, ~20 min' });
+  assert.equal(ack.acks.find(a => a.agent === 'codex').state, 'working');
+  const seen = await claude.call('board_read', { thread_id: q.id });
+  assert.equal(seen.acks.find(a => a.agent === 'codex').note, 'after the auth refactor, ~20 min');
+  assert.ok(seen.last_message_read_by.includes('codex'), 'acknowledging marks the thread read');
+  await codex.call('board_ack', { thread_id: q.id, state: 'done' });
+  assert.equal((await claude.call('board_read', { thread_id: q.id })).acks.find(a => a.agent === 'codex').state, 'done');
+  await assert.rejects(codex.call('board_ack', { thread_id: q.id, state: 'maybe' }), /state|enum|invalid/i);
+  // The human can acknowledge too, from the API.
+  assert.equal((await humanApi(`/api/threads/${q.id}/ack`, { state: 'seen' })).status, 200);
+  assert.ok((await humanApi(`/api/threads/${q.id}`)).data.acks.some(a => a.agent === 'human'));
+
   // Review with verdict between agents.
   const rv = await claude.call('board_request_review', { title: 'auth module', ref: 'abc123', body: 'please check', reviewer: 'codex' });
   await codex.call('board_post', { thread_id: rv.id, body: 'lgtm', verdict: 'approve' });

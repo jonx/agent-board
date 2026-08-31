@@ -123,10 +123,16 @@ export function createHttpServer({ store, humanToken, uiFile, registry = new Ses
         const pr = store.getProject(/^\d+$/.test(seg[1]) ? id(seg[1]) : seg[1]); if (!pr) return json(res, 404, { error: 'not_found' });
         return json(res, 200, { last_id: store.db.prepare('SELECT COALESCE(max(id),0) AS n FROM messages WHERE project_id = ?').get(pr.id).n, messages: store.messagesSince(pr.id, Number(q.get('since') ?? 0), Number(q.get('limit') ?? 50)) });
       }
-      if (seg[0] === 'projects' && seg[2] === 'threads') return json(res, 200, store.listThreads(id(seg[1]), { status: q.get('status') || null, kind: q.get('kind') || null, limit: Number(q.get('limit') ?? 100) }));
+      if (seg[0] === 'projects' && seg[2] === 'threads') {
+        const list = store.listThreads(id(seg[1]), { status: q.get('status') || null, kind: q.get('kind') || null, limit: Number(q.get('limit') ?? 100) });
+        const acks = store.acksForThreads(list.map(t => t.id));
+        return json(res, 200, list.map(t => ({ ...t, acks: acks[t.id] ?? [] })));
+      }
       if (seg[0] === 'threads' && seg[1] && !seg[2]) {
         const t = store.getThread(id(seg[1])); if (!t) return json(res, 404, { error: 'not_found' });
-        return json(res, 200, { thread: t, messages: store.threadMessages(t.id, Number(q.get('since') ?? 0)) });
+        const msgs = store.threadMessages(t.id, Number(q.get('since') ?? 0));
+        const lastId = store.db.prepare(`SELECT max(id) AS id FROM messages WHERE thread_id = ?`).get(t.id).id;
+        return json(res, 200, { thread: t, messages: msgs, acks: store.threadAcks(t.id), read_by: lastId ? store.readReceipts(t.project_id, lastId) : [] });
       }
       return json(res, 404, { error: 'not found' });
     }
@@ -141,6 +147,7 @@ export function createHttpServer({ store, humanToken, uiFile, registry = new Ses
       return json(res, 200, store.createThread(actor, { projectId: id(body.project_id), kind: body.kind ?? 'question', title: body.title, body: body.body, ref: body.ref ?? null, needsHuman: !!body.needs_human, mentions: body.mentions ?? [] }));
     }
     if (seg[0] === 'threads' && seg[2] === 'messages') return json(res, 200, store.post(actor, { threadId: id(seg[1]), body: body.body, verdict: body.verdict ?? null, mentions: body.mentions ?? [] }));
+    if (seg[0] === 'threads' && seg[2] === 'ack') return json(res, 200, store.react(actor, id(seg[1]), body.state, body.note ?? null));
     if (seg[0] === 'threads' && seg[2] === 'status') return json(res, 200, store.setThreadStatus(actor, id(seg[1]), body.status, body.note ?? null));
     if (seg[0] === 'threads' && seg[2] === 'pause') { store.pauseThread(actor, id(seg[1]), body.reason ?? null); return json(res, 200, store.getThread(id(seg[1]))); }
     if (seg[0] === 'agents' && seg[2] === 'pause') { store.pauseAgent(actor, id(seg[1]), body.reason ?? null); return json(res, 200, store.getAgent(id(seg[1]))); }

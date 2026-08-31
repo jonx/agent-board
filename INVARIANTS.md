@@ -13,6 +13,7 @@ These rules protect the supervisor's oversight. They are enforced at the lowest 
 | I6 | Only the human can pause/resume an agent or a thread; a paused agent cannot post; a paused thread accepts only human messages. | `Store` (actor-aware) |
 | I7 | Every agent's inbox contains **all** messages of its project — mentions route attention, they never restrict visibility. | `Store.inbox` |
 | I8 | The message log is a SHA-256 hash chain (`board verify`); any out-of-band edit of the database file is detectable. | `Store.insertMessage` / `verifyChain` |
+| I2b | Acknowledgements (`board_ack`) are append-only: a state is superseded by a newer row, never edited or deleted, so "I said I was on it" cannot be rewritten. | SQLite triggers |
 | I9 | The MCP surface (what agents can call) exposes no human-only power: no approve, pause, resume, archive, delete. | `test/invariants.test.js` on `TOOL_NAMES` |
 
 ## What this does and does not guarantee

@@ -8,12 +8,12 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { BoardError } from './store.js';
-import { THREAD_KINDS, TASK_STATUSES, VERDICTS } from './db.js';
+import { THREAD_KINDS, TASK_STATUSES, VERDICTS, ACK_STATES } from './db.js';
 import { VERSION, changelogSince } from './changelog.js';
 
 export const TOOL_NAMES = [
   'board_projects', 'board_join', 'board_status', 'board_inbox', 'board_wait', 'board_threads', 'board_read', 'board_post',
-  'board_ask', 'board_request_review', 'board_propose_board_change', 'board_resolve',
+  'board_ack', 'board_ask', 'board_request_review', 'board_propose_board_change', 'board_resolve',
   'board_journal', 'board_context', 'board_tasks', 'board_task', 'board_claim', 'board_release',
 ];
 
@@ -23,9 +23,10 @@ const PROTOCOL = [
   'You share this board with other agents (possibly other providers) and with the human, who reads everything.',
   '1. Start: board_join (pick your name), board_status, then board_inbox. If "Project context" is empty or stale, write it with board_context.',
   '2. While working: board_claim the paths you edit; board_journal at each milestone (what you did, what is next, what is uncertain).',
-  '3. Before an irreversible or architecture-level choice: board_ask with critical=true and wait (board_wait) for the human.',
-  '4. When a step is done: board_request_review; act on verdicts.',
-  '5. Before finishing: board_journal a handoff note, board_release your claims, update board_context if the picture changed.',
+  '3. Someone asked you something you cannot answer right away: board_ack "working" (or "declined" if it is not for you) so they know whether to wait. Answer when you can.',
+  '4. Before an irreversible or architecture-level choice: board_ask with critical=true and wait (board_wait) for the human.',
+  '5. When a step is done: board_request_review; act on verdicts.',
+  '6. Before finishing: board_journal a handoff note, board_release your claims, update board_context if the picture changed.',
   'Everything you post is public to the whole project. There are no private messages.',
 ];
 
@@ -50,7 +51,11 @@ export function buildMcpServer(store, ctx) {
   const needAgent = () => { if (!agent) throw new BoardError('not_joined', 'call board_join first: choose your agent name for this session'); return agent; };
   const reg = (name, description, inputSchema, fn, { open = false } = {}) =>
     server.registerTool(name, { description, inputSchema }, wrap((args) => { if (!open) needAgent(); return fn(args); }));
-  const summary = (t) => ({ id: t.id, kind: t.kind, title: t.title, status: t.status, needs_human: !!t.needs_human, paused: t.paused_reason ?? null, by: t.created_by_name, ref: t.ref ?? undefined, messages: t.message_count, updated_at: t.updated_at });
+  const summary = (t) => {
+    const acks = store.threadAcks(t.id);
+    return { id: t.id, kind: t.kind, title: t.title, status: t.status, needs_human: !!t.needs_human, paused: t.paused_reason ?? null, by: t.created_by_name, ref: t.ref ?? undefined, messages: t.message_count, updated_at: t.updated_at,
+      ...(acks.length ? { acks: acks.map(a => `${a.agent}: ${a.state}${a.note ? ` (${a.note})` : ''}`) } : {}) };
+  };
 
   const contextThread = () => store.db.prepare(`SELECT id FROM threads WHERE project_id = ? AND kind = 'status' AND title = ?`).get(pid, CONTEXT_THREAD_TITLE);
   const latestContext = () => {
@@ -135,7 +140,11 @@ export function buildMcpServer(store, ctx) {
   reg('board_inbox',
     'Unread messages in this project (from every agent and the human), grouped by thread. Marks them read unless peek=true. Messages from the human and threads mentioning you come first.',
     { peek: z.boolean().optional(), limit: z.number().int().min(1).max(500).optional() },
-    ({ peek = false, limit = 100 }) => store.inbox(agent, pid, { peek, limit }));
+    ({ peek = false, limit = 100 }) => {
+      const r = store.inbox(agent, pid, { peek, limit });
+      for (const t of r.threads) { const a = store.threadAcks(t.thread_id); if (a.length) t.acks = a.map(x => `${x.agent}: ${x.state}${x.note ? ` (${x.note})` : ''}`); }
+      return r;
+    });
 
   reg('board_wait',
     'Block until a new message arrives in this project (or timeout). Use after asking a question or requesting a review instead of polling. Returns the inbox when something arrives.',
@@ -156,7 +165,9 @@ export function buildMcpServer(store, ctx) {
       if (!t || t.project_id !== pid) throw new BoardError('not_found', 'thread not found in this project');
       const messages = store.threadMessages(thread_id, since_id);
       if (messages.length) store.markRead(agent, pid, Math.max(...messages.map(m => m.id)) );
-      return { thread: summary(t), messages };
+      const last = store.db.prepare(`SELECT max(id) AS id FROM messages WHERE thread_id = ?`).get(thread_id).id;
+      return { thread: summary(t), messages, acks: store.threadAcks(thread_id),
+        last_message_read_by: last ? store.readReceipts(pid, last, agent.id) : [] };
     });
 
   reg('board_post',
@@ -168,12 +179,21 @@ export function buildMcpServer(store, ctx) {
       return store.post(agent, { threadId: thread_id, body, verdict, mentions: mention });
     });
 
+  reg('board_ack',
+    `Say where you stand on a thread, without writing a message (shown as an emoji next to the thread, for agents and the human). Use it the moment you read something addressed to you that you will not answer immediately: "working" means an answer is coming, so nobody waits for nothing or does the work twice. States: seen (read it, nothing to do from me), working (I am on it, answer coming), done (I did what was asked), blocked (I cannot proceed, say why in note), declined (not for me / I am not taking it). Re-acknowledge to update your state.`,
+    { thread_id: z.number().int(), state: z.enum(ACK_STATES), note: z.string().max(200).optional().describe('short context, e.g. "after the auth refactor, ~20 min"') },
+    ({ thread_id, state, note }) => {
+      const t = store.getThread(thread_id);
+      if (!t || t.project_id !== pid) throw new BoardError('not_found', 'thread not found in this project');
+      return store.react(agent, thread_id, state, note);
+    });
+
   reg('board_ask',
     `Open a question to the other agents and the human. Set critical=true for decisions that are hard to reverse (schema changes, deleting data, architecture, security, spending, anything you would want a senior engineer to sign off on): the thread then waits for the human's explicit approval — do not proceed until board_read shows status "approved". Use to=[...] to ask specific agents for their opinion.`,
     { title: z.string().min(1), body: z.string().min(1).describe('context, options considered, your recommendation'), critical: z.boolean().optional(), to: z.array(z.string()).optional() },
     ({ title, body, critical = false, to = [] }) => {
       const t = store.createThread(agent, { projectId: pid, kind: critical ? 'decision' : 'question', title, body, mentions: to });
-      return { ...summary(t), next: critical ? 'Wait for the human: board_wait then board_read; proceed only when status is approved.' : 'Others will answer in this thread; use board_wait or check board_inbox.' };
+      return { ...summary(t), next: critical ? 'Wait for the human: board_wait then board_read; proceed only when status is approved.' : 'Others will answer in this thread. board_wait blocks until something arrives; board_read shows who has read it (last_message_read_by) and who acknowledged it (acks), so you know whether an answer is coming before you decide to wait or move on.' };
     });
 
   reg('board_request_review',

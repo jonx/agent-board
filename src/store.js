@@ -4,7 +4,7 @@
 
 import { EventEmitter } from 'node:events';
 import { createHash } from 'node:crypto';
-import { THREAD_KINDS, THREAD_STATUSES, TASK_STATUSES, VERDICTS, SYSTEM_AGENT } from './db.js';
+import { THREAD_KINDS, THREAD_STATUSES, TASK_STATUSES, VERDICTS, SYSTEM_AGENT, ACK_STATES } from './db.js';
 
 export class BoardError extends Error {
   constructor(code, message, extra = {}) { super(message); this.code = code; this.extra = extra; }
@@ -265,6 +265,46 @@ export class Store {
     this.db.prepare(`UPDATE threads SET paused_reason = ?, updated_at = ? WHERE id = ?`).run(reason ?? null, now(), threadId);
     this.event(reason ? 'thread.paused' : 'thread.resumed', { agentId: actor.id, projectId: thread.project_id, threadId, data: { reason } });
     this.emit('thread', { projectId: thread.project_id, threadId });
+  }
+
+  // ---------- acknowledgements ----------
+  /** Say where you stand on a thread without writing a message. Latest state per agent wins. */
+  react(actor, threadId, state, note = null) {
+    if (!ACK_STATES.includes(state)) throw new BoardError('bad_input', `state must be one of ${ACK_STATES.join(', ')}`);
+    const thread = this.getThread(threadId);
+    if (!thread) throw new BoardError('not_found', `thread ${threadId} not found`);
+    this.assertCanAct(actor, thread.project_id, thread);
+    if (note && note.length > 200) note = note.slice(0, 200);
+    this.db.prepare(`INSERT INTO reactions (thread_id, project_id, agent_id, state, note, created_at) VALUES (?,?,?,?,?,?)`)
+      .run(threadId, thread.project_id, actor.id, state, note, now());
+    // Acknowledging a thread means you have seen what is in it.
+    if (actor.role !== 'human') {
+      const last = this.db.prepare(`SELECT max(id) AS id FROM messages WHERE thread_id = ?`).get(threadId).id;
+      if (last) this.markRead(actor, thread.project_id, last);
+    }
+    this.emit('ack', { projectId: thread.project_id, threadId, agentId: actor.id, state });
+    return { thread_id: threadId, state, note, acks: this.threadAcks(threadId) };
+  }
+
+  /** Current acknowledgement of each agent on a thread (latest row per agent). */
+  threadAcks(threadId) {
+    return this.db.prepare(`
+      SELECT r.state, r.note, r.created_at, a.name AS agent, a.role AS agent_role FROM reactions r JOIN agents a ON a.id = r.agent_id
+      WHERE r.thread_id = ?1 AND r.id IN (SELECT max(id) FROM reactions WHERE thread_id = ?1 GROUP BY agent_id)
+      ORDER BY r.created_at`).all(threadId);
+  }
+  acksForThreads(threadIds) {
+    const out = {};
+    for (const id of threadIds) { const a = this.threadAcks(id); if (a.length) out[id] = a; }
+    return out;
+  }
+
+  /** Which agents have already read up to a given message (their inbox cursor passed it). */
+  readReceipts(projectId, messageId, exceptAgentId = null) {
+    return this.db.prepare(`
+      SELECT a.name, m.last_read_message_id FROM memberships m JOIN agents a ON a.id = m.agent_id
+      WHERE m.project_id = ? AND m.last_read_message_id >= ? AND a.id <> COALESCE(?, -1) AND a.provider IS NOT 'system'
+      ORDER BY a.name`).all(projectId, messageId, exceptAgentId).map(r => r.name);
   }
 
   // ---------- inbox ----------

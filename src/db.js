@@ -11,6 +11,8 @@ export const THREAD_KINDS = ['question', 'review', 'decision', 'status', 'board-
 export const THREAD_STATUSES = ['open', 'awaiting_human', 'approved', 'rejected', 'changes_requested', 'resolved'];
 export const VERDICTS = ['approve', 'request_changes', 'reject'];
 export const TASK_STATUSES = ['todo', 'doing', 'blocked', 'done'];
+export const ACK_STATES = ['seen', 'working', 'done', 'blocked', 'declined'];
+export const ACK_EMOJI = { seen: '\u{1F440}', working: '\u{1F527}', done: '\u2705', blocked: '\u26D4', declined: '\u{1F645}' };
 
 // Column names that would let someone hide content. Their absence is an invariant.
 export const FORBIDDEN_COLUMNS = ['private', 'hidden', 'visibility', 'secret', 'deleted', 'deleted_at', 'recipient_id', 'to_agent_id'];
@@ -102,6 +104,20 @@ CREATE TABLE IF NOT EXISTS claims (
   released_at TEXT
 );
 
+-- Acknowledgements: a small closed vocabulary so an agent can say "seen / I am on it /
+-- done / blocked / not me" without writing a message. Append-only like everything else;
+-- the latest row per (thread, agent) is the current state. Rendered as emoji in the UI.
+CREATE TABLE IF NOT EXISTS reactions (
+  id         INTEGER PRIMARY KEY,
+  thread_id  INTEGER NOT NULL REFERENCES threads(id),
+  project_id INTEGER NOT NULL REFERENCES projects(id),
+  agent_id   INTEGER NOT NULL REFERENCES agents(id),
+  state      TEXT NOT NULL CHECK (state IN ('seen','working','done','blocked','declined')),
+  note       TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS reactions_thread ON reactions(thread_id, id);
+
 -- Key/value store for server state (e.g. last board version seen).
 CREATE TABLE IF NOT EXISTS meta (
   key   TEXT PRIMARY KEY,
@@ -126,6 +142,13 @@ CREATE TRIGGER IF NOT EXISTS inv_messages_no_update BEFORE UPDATE ON messages
 BEGIN SELECT RAISE(ABORT, 'INVARIANT: messages are append-only (no update)'); END;
 CREATE TRIGGER IF NOT EXISTS inv_messages_no_delete BEFORE DELETE ON messages
 BEGIN SELECT RAISE(ABORT, 'INVARIANT: messages are append-only (no delete)'); END;
+
+-- I2b. Acknowledgements are append-only too: a state is superseded by a newer row,
+--      never edited away, so "I said I was on it" cannot be rewritten.
+CREATE TRIGGER IF NOT EXISTS inv_reactions_no_update BEFORE UPDATE ON reactions
+BEGIN SELECT RAISE(ABORT, 'INVARIANT: acknowledgements are append-only (no update)'); END;
+CREATE TRIGGER IF NOT EXISTS inv_reactions_no_delete BEFORE DELETE ON reactions
+BEGIN SELECT RAISE(ABORT, 'INVARIANT: acknowledgements are append-only (no delete)'); END;
 
 -- I2. The audit log is append-only.
 CREATE TRIGGER IF NOT EXISTS inv_events_no_update BEFORE UPDATE ON events

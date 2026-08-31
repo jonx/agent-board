@@ -38,6 +38,15 @@ export function runInvariantChecks() {
   mustThrow('messages no delete', () => db.prepare(`DELETE FROM messages`).run(), /append-only/);
   mustThrow('events no delete', () => db.prepare(`DELETE FROM events`).run(), /append-only/);
   mustThrow('events no update', () => db.prepare(`UPDATE events SET data = '{}'`).run(), /append-only/);
+  check('acks recorded', () => { s.react(a1, q.id, 'working', 'on it, ~20 min'); if (s.threadAcks(q.id)[0].state !== 'working') throw new Error('ack not stored'); });
+  mustThrow('acks no update', () => db.prepare(`UPDATE reactions SET state = 'done'`).run(), /append-only/);
+  mustThrow('acks no delete', () => db.prepare(`DELETE FROM reactions`).run(), /append-only/);
+  check('ack history is kept, latest wins', () => {
+    s.react(a1, q.id, 'done');
+    const rows = db.prepare(`SELECT state FROM reactions WHERE thread_id = ? AND agent_id = ? ORDER BY id`).all(q.id, a1.id);
+    if (rows.length < 2 || rows[0].state !== 'working') throw new Error('history lost');
+    if (s.threadAcks(q.id).find(x => x.agent === 'alpha').state !== 'done') throw new Error('latest not shown');
+  });
   mustThrow('threads no delete', () => db.prepare(`DELETE FROM threads WHERE id = ?`).run(q.id), /cannot be deleted/);
   mustThrow('projects no delete', () => db.prepare(`DELETE FROM projects`).run(), /cannot be deleted/);
   mustThrow('message needs thread', () => db.prepare(`INSERT INTO messages (id,thread_id,project_id,author_id,body,prev_hash,hash,created_at) VALUES (999,999,1,1,'x','a','b','c')`).run(), /FOREIGN KEY/i);
@@ -96,6 +105,12 @@ export function runInvariantChecks() {
     s.post(a1, { threadId: q.id, body: 'note only for @beta (there is no such thing)' });
     const inbox = s.inbox(a3, p.id, { peek: true });
     if (!inbox.threads.some(t => t.messages.some(m => m.body.includes('no such thing')))) throw new Error('mention hid a message from a third agent');
+  });
+  check('paused agent cannot ack either', () => {
+    s.pauseAgent(human, a2.id, 'stop');
+    let threw = false; try { s.react(a2, q.id, 'working'); } catch (e) { threw = e.code === 'paused'; }
+    s.pauseAgent(human, a2.id, null);
+    if (!threw) throw new Error('paused agent acknowledged');
   });
   // I8. Hash chain intact.
   check('hash chain', () => { const v = s.verifyChain(); if (!v.ok) throw new Error(`broken at ${v.broken_at}`); });

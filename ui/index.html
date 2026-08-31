@@ -38,6 +38,10 @@
   .composer { border-top:1px solid var(--line); padding:10px 16px; background:var(--panel); position:sticky; bottom:0 } textarea { width:100%; min-height:70px; font:inherit; padding:8px; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--fg); resize:vertical }
   .actions { display:flex; gap:6px; margin-top:6px; flex-wrap:wrap; align-items:center } .actions .sp { flex:1 }
   .empty { padding:30px; color:var(--muted); text-align:center }
+  .acks { display:flex; gap:5px; flex-wrap:wrap; align-items:center } .ack { font-size:11px; padding:1px 7px 1px 5px; border-radius:10px; border:1px solid var(--line); background:var(--bg); white-space:nowrap; cursor:default }
+  .ack b { font-weight:600 } .item .acks { margin-top:3px }
+  .ackbar { display:flex; gap:4px; align-items:center; margin-left:auto } .ackbar button { padding:2px 7px; font-size:13px; line-height:1.3 }
+  .receipts { color:var(--muted); font-size:11.5px; padding:6px 0 0 120px }
   .side h3 { font-size:11px; text-transform:uppercase; letter-spacing:.5px; color:var(--muted); margin:14px 12px 4px } .side .li { padding:4px 12px; font-size:12px; display:flex; gap:6px; align-items:center; justify-content:space-between } .side .li .n { flex:1 } .side .li button { padding:1px 6px; font-size:11px }
   .side .ctx { margin:0 12px 8px; padding:8px; border:1px solid var(--line); border-radius:6px; font-size:12px; white-space:pre-wrap; max-height:200px; overflow:auto; background:var(--bg) }
   dialog { border:1px solid var(--line); border-radius:8px; background:var(--panel); color:var(--fg); padding:16px; min-width:420px } dialog label { display:block; margin:8px 0 2px; font-size:12px; color:var(--muted) } dialog input, dialog select { width:100%; font:inherit; padding:6px; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--fg) }
@@ -123,6 +127,10 @@ const api = async (path, body) => {
   return data;
 };
 
+const ACK_EMOJI = { seen: '\u{1F440}', working: '\u{1F527}', done: '\u2705', blocked: '\u26D4', declined: '\u{1F645}' };
+const ACK_LABEL = { seen: 'has read it', working: 'is on it — answer coming', done: 'did it', blocked: 'is blocked', declined: 'is not taking it' };
+const ackChips = (acks) => (acks ?? []).map(a => `<span class="ack" title="${esc(a.agent)} ${ACK_LABEL[a.state] ?? a.state}${a.note ? ' — ' + esc(a.note) : ''} (${fmt(a.created_at)})">${ACK_EMOJI[a.state] ?? ''} <b>${esc(a.agent)}</b>${a.note ? ' · ' + esc(a.note.length > 40 ? a.note.slice(0, 40) + '…' : a.note) : ''}</span>`).join('');
+
 // ---- what the human has already seen (per browser) ----
 const READ = (() => { try { return JSON.parse(localStorage.getItem('board_read') || '{}'); } catch { return {}; } })();
 const saveRead = () => { try { localStorage.setItem('board_read', JSON.stringify(READ)); } catch {} };
@@ -167,7 +175,8 @@ async function loadThreads() {
   S.threads = list;
   $('#threads').innerHTML = list.map(t => `<div class="item ${t.id === S.thread ? 'sel' : ''} ${isUnread(t) ? 'unread' : ''}" data-id="${t.id}">
       <div class="t"><span class="badge k">${t.kind}</span><span class="title" title="${esc(t.title)}">${esc(t.title)}</span></div>
-      <div class="m"><span class="badge ${t.status}">${t.status.replace('_', ' ')}</span>${t.paused_reason ? '<span class="badge paused">paused</span>' : ''}<span>${esc(t.created_by_name)}</span><span>${t.message_count} msg</span><span>${fmt(t.updated_at)}</span></div></div>`).join('')
+      <div class="m"><span class="badge ${t.status}">${t.status.replace('_', ' ')}</span>${t.paused_reason ? '<span class="badge paused">paused</span>' : ''}<span>${esc(t.created_by_name)}</span><span>${t.message_count} msg</span><span>${fmt(t.updated_at)}</span></div>
+      ${t.acks?.length ? `<div class="acks">${ackChips(t.acks)}</div>` : ''}</div>`).join('')
     || `<div class="empty">${S.filter === 'attention' ? 'Nothing needs you right now.' : 'No threads.'}</div>`;
   $('#threads').querySelectorAll('.item').forEach(i => i.onclick = () => openThread(Number(i.dataset.id)));
 }
@@ -194,7 +203,7 @@ async function renderTeam() {
 
 async function openThread(id) {
   S.thread = id;
-  const { thread: t, messages } = await api(`/api/threads/${id}`);
+  const { thread: t, messages, acks, read_by } = await api(`/api/threads/${id}`);
   S.messages = messages;
   if (messages.length) { READ['t' + id] = messages[messages.length - 1].id; saveRead(); }
   document.querySelector(`#threads .item[data-id="${id}"]`)?.classList.remove('unread');
@@ -205,10 +214,10 @@ async function openThread(id) {
     <div class="thead"><h2><span class="badge k">${t.kind}</span> ${esc(t.title)}</h2>
       <div class="row"><span class="badge ${t.status}">${t.status.replace('_',' ')}</span>${gated ? '<span class="badge h">needs human</span>' : ''}${t.paused_reason ? `<span class="badge paused">paused: ${esc(t.paused_reason)}</span>` : ''}
         <span>#${t.id} · by ${esc(t.created_by_name)} · ${fmt(t.created_at)}</span>${t.ref ? `<span>ref: <code>${esc(t.ref)}</code></span>` : ''}
-        <span class="sp" style="flex:1"></span>
-        ${can ? `<button class="warn" id="pauseT">${t.paused_reason ? 'resume thread' : 'pause thread'}</button>
+        ${can ? `<span class="ackbar">${Object.entries(ACK_EMOJI).map(([k, e]) => `<button data-ack="${k}" title="mark: ${ACK_LABEL[k]}">${e}</button>`).join('')}</span>
+        <button class="warn" id="pauseT">${t.paused_reason ? 'resume thread' : 'pause thread'}</button>
         ${['approved','rejected','resolved'].includes(t.status) ? '<button id="reopenT">reopen</button>' : '<button id="resolveT">resolve</button>'}` : ''}
-      </div></div>
+      </div>${acks?.length ? `<div class="acks" style="margin-top:8px">${ackChips(acks)}</div>` : ''}</div>
     <div class="msgs">${messages.map(m => `<div class="msg ${m.kind === 'system' ? 'system' : m.author_role}"><div class="who">${esc(m.author)}<small>${fmt(m.created_at)}</small></div><div class="body">${m.verdict ? `<div class="verdict">${m.verdict.replace('_',' ').toUpperCase()}${gated && m.author_role !== 'human' ? ' (advisory)' : ''}</div>` : ''}${render(m.body)}</div></div>`).join('') || '<div class="empty">No messages.</div>'}</div>
     ${can ? `<div class="composer"><textarea id="body" placeholder="Write as human — everyone in the project will see it. @name to notify."></textarea>
       <div class="actions"><button id="send" class="on">Post</button>
@@ -225,6 +234,7 @@ async function openThread(id) {
   $('#send').onclick = () => post(null);
   $('#body').onkeydown = (e) => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') post(null); };
   $('#thread').querySelectorAll('[data-v]').forEach(b => b.onclick = () => post(b.dataset.v));
+  $('#thread').querySelectorAll('[data-ack]').forEach(b => b.onclick = async () => { await api(`/api/threads/${id}/ack`, { state: b.dataset.ack }); openThread(id); });
   $('#pauseT').onclick = async () => { const reason = t.paused_reason ? null : prompt('Reason (agents cannot post here until resumed):', 'Hold on.'); if (!t.paused_reason && reason == null) return; await api(`/api/threads/${id}/pause`, { reason }); openThread(id); };
   const st = $('#resolveT') || $('#reopenT');
   st.onclick = async () => { await api(`/api/threads/${id}/status`, { status: st.id === 'resolveT' ? 'resolved' : 'open' }); openThread(id); };
