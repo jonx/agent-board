@@ -149,13 +149,23 @@ export class Store {
       .map(m => ({ ...m, mentions: JSON.parse(m.mentions) }));
   }
 
-  /** Compact index for the UI: every thread with its last message id, so one source of
-   *  truth ("has the human read this thread?") drives both the project list and the tabs. */
+  /** Compact index for the UI, with what each thread asks of the human:
+   *   - 'action'  : waiting for a decision (or paused) — the human must answer
+   *   - 'reply'   : the human is in this conversation and someone replied, or was @mentioned
+   *   - 'ambient' : agents talking to each other, journals, context, board notices — readable, never demanding
+   *  Only 'action' and 'reply' ever produce an unread badge. This is the single definition
+   *  of "needs the human", used by the UI, the CLI and the project counters. */
   threadsIndex() {
     return this.db.prepare(`
-      SELECT t.id, t.project_id, t.kind, t.status, t.needs_human,
-             (SELECT max(m.id) FROM messages m WHERE m.thread_id = t.id) AS last_message_id
-      FROM threads t JOIN projects p ON p.id = t.project_id WHERE p.archived = 0`).all();
+      SELECT t.id, t.project_id, t.kind, t.title, t.status, t.needs_human, t.paused_reason, t.updated_at,
+        (SELECT max(m.id) FROM messages m WHERE m.thread_id = t.id) AS last_message_id,
+        (SELECT max(m.id) FROM messages m JOIN agents a ON a.id = m.author_id WHERE m.thread_id = t.id AND a.role = 'human') AS human_last_id,
+        (SELECT a.role FROM messages m JOIN agents a ON a.id = m.author_id WHERE m.thread_id = t.id ORDER BY m.id DESC LIMIT 1) AS last_author_role,
+        (SELECT m.kind FROM messages m WHERE m.thread_id = t.id ORDER BY m.id DESC LIMIT 1) AS last_kind,
+        (SELECT count(*) FROM messages m WHERE m.thread_id = t.id AND m.kind <> 'system' AND m.mentions LIKE '%"human"%'
+           AND m.id > COALESCE((SELECT max(m2.id) FROM messages m2 JOIN agents a2 ON a2.id = m2.author_id WHERE m2.thread_id = t.id AND a2.role = 'human'), 0)) AS mentions_human
+      FROM threads t JOIN projects p ON p.id = t.project_id WHERE p.archived = 0`).all()
+      .map(t => ({ ...t, attention: attentionOf(t) }));
   }
 
   /** Project-wide feed (for the human UI/hooks): messages after sinceId. */
@@ -228,7 +238,11 @@ export class Store {
     if (verdict && !VERDICTS.includes(verdict)) throw new BoardError('bad_input', `verdict must be one of ${VERDICTS.join(', ')}`);
     this.assertCanAct(actor, thread.project_id, thread);
 
-    let newStatus = null, advisory = false;
+    let newStatus = null, advisory = false, implied = null;
+    if (!verdict && actor.role === 'human' && thread.status === 'awaiting_human') {
+      implied = impliedVerdict(body);
+      if (implied) verdict = implied;
+    }
     if (verdict) {
       const target = { approve: 'approved', request_changes: 'changes_requested', reject: 'rejected' }[verdict];
       if (thread.needs_human && actor.role !== 'human') advisory = true; // recorded as an opinion, does not decide
@@ -242,9 +256,9 @@ export class Store {
       this.db.exec('COMMIT');
     } catch (e) { this.db.exec('ROLLBACK'); throw e; }
     if (actor.role !== 'human') this.markRead(actor, thread.project_id, id); // your own post is read
-    if (newStatus) this.event('thread.status', { agentId: actor.id, projectId: thread.project_id, threadId, data: { status: newStatus, via: 'verdict' } });
+    if (newStatus) this.event('thread.status', { agentId: actor.id, projectId: thread.project_id, threadId, data: { status: newStatus, via: implied ? 'one-word reply' : 'verdict' } });
     this.emit('message', { projectId: thread.project_id, threadId, messageId: id, authorId: actor.id, authorRole: actor.role });
-    return { id, status: newStatus ?? thread.status, advisory };
+    return { id, status: newStatus ?? thread.status, advisory, ...(implied ? { implied_verdict: implied } : {}) };
   }
 
   setThreadStatus(actor, threadId, status, note = null) {
@@ -505,6 +519,26 @@ export class Store {
     }
     return { ok: true, checked: rows.length };
   }
+}
+
+/** What a thread asks of the human. See threadsIndex(). */
+export function attentionOf(t) {
+  if (t.status === 'awaiting_human' || t.paused_reason) return 'action';
+  if (t.mentions_human > 0) return 'reply';
+  if (t.human_last_id && t.last_message_id > t.human_last_id && t.last_author_role !== 'human' && t.last_kind !== 'system') return 'reply';
+  return 'ambient';
+}
+
+/** A human reply that is just "ok" / "non" decides a thread that is waiting for them.
+ *  Anything longer (e.g. "ok but rename it first") is a plain comment, never a silent approval. */
+const YES = /^(ok(ay)?|oui|yes|yep|ya|go|d'accord|daccord|ça marche|ca marche|feu vert|vas-y|vasy|allez|approuvé|approuve|approved|lgtm|\+1|👍|👌|✅|🚀)$/i;
+const NO = /^(non|no|nope|nan|stop|refusé|refuse|rejected|reject|pas d'accord|-1|👎|❌|🚫|✋)$/i;
+export function impliedVerdict(body) {
+  const t = String(body).trim().replace(/[.!…\s]+$/u, '').trim();
+  if (t.length > 24) return null;
+  if (YES.test(t)) return 'approve';
+  if (NO.test(t)) return 'reject';
+  return null;
 }
 
 export function messageHash(f) {

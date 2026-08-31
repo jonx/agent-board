@@ -7,6 +7,7 @@ import { readFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { buildMcpServer, CONTEXT_THREAD_TITLE } from './mcp.js';
+import { attentionOf } from './store.js';
 import { BoardError } from './store.js';
 
 /** Live MCP sessions: which session holds which agent name. A name is "live" while its
@@ -106,6 +107,18 @@ export function createHttpServer({ store, humanToken, uiFile, registry = new Ses
       if (p === '/api/projects') return json(res, 200, store.listProjects());
       if (p === '/api/agents') return json(res, 200, store.listAgents());
       if (p === '/api/threads-index') return json(res, 200, store.threadsIndex());
+      if (p === '/api/todo') { // everything that actually needs the human, across all projects
+        const byProject = new Map(store.listProjects().map(pr => [pr.id, pr.name]));
+        const items = store.threadsIndex().filter(t => t.attention !== 'ambient')
+          .sort((a, b) => (a.attention === b.attention ? 0 : a.attention === 'action' ? -1 : 1) || (a.updated_at < b.updated_at ? 1 : -1));
+        return json(res, 200, items.map(t => {
+          const msgs = store.threadMessages(t.id);
+          return { thread_id: t.id, project: byProject.get(t.project_id), kind: t.kind, title: t.title, status: t.status,
+            attention: t.attention, paused: t.paused_reason ?? null, updated_at: t.updated_at,
+            last: msgs.length ? { author: msgs.at(-1).author, body: msgs.at(-1).body } : null,
+            asked_by: msgs.length ? msgs[0].author : null, question: msgs.length ? msgs[0].body : null };
+        }));
+      }
       if (p === '/api/verify') return json(res, 200, store.verifyChain());
       if (p === '/api/version') return json(res, 200, { version: store.getMeta('board_version') });
       if (p === '/api/events') return json(res, 200, store.listEvents(q.get('project_id') ? id(q.get('project_id')) : null, Number(q.get('limit') ?? 100)));
@@ -127,7 +140,8 @@ export function createHttpServer({ store, humanToken, uiFile, registry = new Ses
       if (seg[0] === 'projects' && seg[2] === 'threads') {
         const list = store.listThreads(id(seg[1]), { status: q.get('status') || null, kind: q.get('kind') || null, limit: Number(q.get('limit') ?? 100) });
         const acks = store.acksForThreads(list.map(t => t.id));
-        return json(res, 200, list.map(t => ({ ...t, acks: acks[t.id] ?? [] })));
+        const att = new Map(store.threadsIndex().map(t => [t.id, t.attention]));
+        return json(res, 200, list.map(t => ({ ...t, acks: acks[t.id] ?? [], attention: att.get(t.id) ?? 'ambient' })));
       }
       if (seg[0] === 'threads' && seg[1] && !seg[2]) {
         const t = store.getThread(id(seg[1])); if (!t) return json(res, 404, { error: 'not_found' });

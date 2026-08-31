@@ -43,6 +43,8 @@
   .ack b { font-weight:600 } .item .acks { margin-top:3px }
   .ackbar { display:flex; gap:4px; align-items:center; margin-left:auto } .ackbar button { padding:2px 7px; font-size:13px; line-height:1.3 }
   .receipts { color:var(--muted); font-size:11.5px; padding:6px 0 0 120px }
+  .decide { display:flex; gap:5px; margin-top:6px } .decide button { padding:2px 10px; font-size:12px } .decide .why { flex:1; font:inherit; font-size:12px; padding:2px 6px; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--fg); min-width:0 }
+  .hint { color:var(--muted); font-size:11.5px; margin-top:4px }
   .side h3 { font-size:11px; text-transform:uppercase; letter-spacing:.5px; color:var(--muted); margin:14px 12px 4px } .side .li { padding:4px 12px; font-size:12px; display:flex; gap:6px; align-items:center; justify-content:space-between } .side .li .n { flex:1 } .side .li button { padding:1px 6px; font-size:11px }
   .side .ctx { margin:0 12px 8px; padding:8px; border:1px solid var(--line); border-radius:6px; font-size:12px; white-space:pre-wrap; max-height:200px; overflow:auto; background:var(--bg) }
   dialog { border:1px solid var(--line); border-radius:8px; background:var(--panel); color:var(--fg); padding:16px; min-width:420px } dialog label { display:block; margin:8px 0 2px; font-size:12px; color:var(--muted) } dialog input, dialog select { width:100%; font:inherit; padding:6px; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--fg) }
@@ -135,7 +137,9 @@ const ackChips = (acks) => (acks ?? []).map(a => `<span class="ack" title="${esc
 // ---- what the human has already seen (per browser) ----
 const READ = (() => { try { return JSON.parse(localStorage.getItem('board_read') || '{}'); } catch { return {}; } })();
 const saveRead = () => { try { localStorage.setItem('board_read', JSON.stringify(READ)); } catch {} };
-const isUnread = (t) => (t.last_message_id ?? 0) > (READ['t' + t.id] ?? 0);
+// "Unread" means: this thread asks something of you AND you have not opened it since.
+// Agent-to-agent chatter, journals, context and board notices are ambient — never badged.
+const isUnread = (t) => (t.attention ?? 'ambient') !== 'ambient' && (t.last_message_id ?? 0) > (READ['t' + t.id] ?? 0);
 const teamKey = () => 'team' + S.project;
 
 // ---- state ----
@@ -147,11 +151,11 @@ async function loadProjects() {
   S.projects = projects; S.agents = agents;
   // Same definition of "unread" as the tabs: a thread whose last message the human has not opened.
   S.unreadByProject = {};
-  for (const t of index) if ((t.last_message_id ?? 0) > (READ['t' + t.id] ?? 0)) S.unreadByProject[t.project_id] = (S.unreadByProject[t.project_id] ?? 0) + 1;
+  for (const t of index) if (isUnread(t)) S.unreadByProject[t.project_id] = (S.unreadByProject[t.project_id] ?? 0) + 1;
   const el = $('#projects');
   el.innerHTML = S.projects.map(p => {
     const n = S.unreadByProject[p.id] ?? 0;
-    return `<div class="item ${p.id === S.project ? 'sel' : ''} ${n ? 'unread' : ''}" data-id="${p.id}"><div class="t"><span class="title">${esc(p.name)}</span>${n ? `<span class="count" title="${n} thread(s) with messages you have not read">${n}</span>` : ''}${p.awaiting_human ? `<span class="badge h">${p.awaiting_human} waiting</span>` : ''}</div><div class="m">${p.open_threads} active${p.archived ? ' · archived' : ''}</div></div>`;
+    return `<div class="item ${p.id === S.project ? 'sel' : ''} ${n ? 'unread' : ''}" data-id="${p.id}"><div class="t"><span class="title">${esc(p.name)}</span>${n ? `<span class="count" title="${n} thread(s) waiting on you">${n}</span>` : ''}${p.awaiting_human ? `<span class="badge h">${p.awaiting_human} waiting</span>` : ''}</div><div class="m">${p.open_threads} active${p.archived ? ' · archived' : ''}</div></div>`;
   }).join('') || '<div class="empty">No project yet.<br>One is created when the first agent connects.</div>';
   el.querySelectorAll('.item').forEach(i => i.onclick = () => selectProject(Number(i.dataset.id)));
   $('#newThread').disabled = !S.project || !token;
@@ -165,28 +169,37 @@ async function loadProjects() {
 async function selectProject(id) { S.project = id; try { localStorage.setItem('board_project', id); } catch {} S.thread = null; $('#thread').innerHTML = '<div class="empty">Pick a thread.</div>'; await loadProjects(); }
 
 const ACTIVE = new Set(['open', 'awaiting_human', 'changes_requested']);
-const needsMe = (t) => t.status === 'awaiting_human' || t.paused_reason || (t.kind === 'review' && t.status === 'open');
+const needsMe = (t) => (t.attention ?? 'ambient') !== 'ambient';
 async function loadThreads() {
   if (!S.project) return;
   const [all, detail] = await Promise.all([api(`/api/projects/${S.project}/threads?limit=200`), api(`/api/projects/${S.project}`)]);
   S.detail = detail;
   const lists = { attention: all.filter(needsMe), active: all.filter(t => ACTIVE.has(t.status)), all };
-  const teamNew = detail.context && (READ[teamKey()] ?? 0) < detail.context.id;
   for (const b of document.querySelectorAll('.tabs button')) {
     const f = b.dataset.f, label = b.dataset.label ?? (b.dataset.label = b.textContent.trim());
-    const n = f === 'team' ? (teamNew ? 1 : 0) : lists[f].filter(isUnread).length;
-    b.innerHTML = label + (n ? `<span class="n">${f === 'team' ? '•' : n}</span>` : '');
-    b.title = n ? (f === 'team' ? 'project context updated' : `${n} thread(s) with new messages`) : '';
+    const n = f === 'attention' ? lists.attention.filter(isUnread).length : 0;   // only this tab ever badges
+    b.innerHTML = label + (n ? `<span class="n">${n}</span>` : '');
+    b.title = n ? `${n} thread(s) waiting on you` : '';
   }
   if (S.filter === 'team') return renderTeam();
+  const can = !!token;
   const list = lists[S.filter];
   S.threads = list;
   $('#threads').innerHTML = list.map(t => `<div class="item ${t.id === S.thread ? 'sel' : ''} ${isUnread(t) ? 'unread' : ''}" data-id="${t.id}">
       <div class="t"><span class="badge k">${t.kind}</span><span class="title" title="${esc(t.title)}">${esc(t.title)}</span></div>
       <div class="m"><span class="badge ${t.status}">${t.status.replace('_', ' ')}</span>${t.paused_reason ? '<span class="badge paused">paused</span>' : ''}<span>${esc(t.created_by_name)}</span><span>${t.message_count} msg</span><span>${fmt(t.updated_at)}</span></div>
-      ${t.acks?.length ? `<div class="acks">${ackChips(t.acks)}</div>` : ''}</div>`).join('')
+      ${t.acks?.length ? `<div class="acks">${ackChips(t.acks)}</div>` : ''}
+      ${can && t.status === 'awaiting_human' ? `<div class="decide" data-for="${t.id}"><input class="why" placeholder="optional note"><button class="ok" data-d="approve">ok</button><button class="bad" data-d="reject">non</button></div>` : ''}</div>`).join('')
     || `<div class="empty">${S.filter === 'attention' ? 'Nothing needs you right now.' : 'No threads.'}</div>`;
-  $('#threads').querySelectorAll('.item').forEach(i => i.onclick = () => openThread(Number(i.dataset.id)));
+  $('#threads').querySelectorAll('.item').forEach(i => i.onclick = (e) => { if (e.target.closest('.decide')) return; openThread(Number(i.dataset.id)); });
+  $('#threads').querySelectorAll('.decide').forEach(d => {
+    d.onclick = (e) => e.stopPropagation();
+    d.querySelectorAll('[data-d]').forEach(b => b.onclick = async () => {
+      const v = b.dataset.d, note = d.querySelector('.why').value.trim() || (v === 'approve' ? 'ok' : 'non');
+      await api(`/api/threads/${d.dataset.for}/messages`, { body: note, verdict: v });
+      READ['t' + d.dataset.for] = 1e15; saveRead(); loadThreads(); loadProjects();
+    });
+  });
 }
 
 async function renderTeam() {
@@ -228,7 +241,8 @@ async function openThread(id) {
         ${['approved','rejected','resolved'].includes(t.status) ? '<button id="reopenT">reopen</button>' : '<button id="resolveT">resolve</button>'}` : ''}
       </div>${acks?.length ? `<div class="acks" style="margin-top:8px">${ackChips(acks)}</div>` : ''}</div>
     <div class="msgs">${messages.map(m => `<div class="msg ${m.kind === 'system' ? 'system' : m.author_role}"><div class="who">${esc(m.author)}<small>${fmt(m.created_at)}</small></div><div class="body">${m.verdict ? `<div class="verdict">${m.verdict.replace('_',' ').toUpperCase()}${gated && m.author_role !== 'human' ? ' (advisory)' : ''}</div>` : ''}${render(m.body)}</div></div>`).join('') || '<div class="empty">No messages.</div>'}</div>
-    ${can ? `<div class="composer"><textarea id="body" placeholder="Write as human — everyone in the project will see it. @name to notify."></textarea>
+    ${can ? `<div class="composer"><textarea id="body" placeholder="${t.status === 'awaiting_human' ? 'Type just \'ok\' or \'non\' to decide — anything longer is a plain comment.' : 'Write as human — everyone in the project will see it. @name to notify.'}"></textarea>
+      ${t.status === 'awaiting_human' ? '<div class="hint">This thread waits on you: a one-word \'ok\' / \'non\' decides it; a longer message stays a comment.</div>' : ''}
       <div class="actions"><button id="send" class="on">Post</button>
         <span class="sp"></span>
         <button class="ok" data-v="approve">Approve</button><button class="warn" data-v="request_changes">Request changes</button><button class="bad" data-v="reject">Reject</button></div></div>` : ''}`;
@@ -238,7 +252,9 @@ async function openThread(id) {
   const post = async (verdict) => {
     const body = $('#body').value.trim() || (verdict ? verdict.replace('_', ' ') : '');
     if (!body) return;
-    await api(`/api/threads/${id}/messages`, { body, verdict }); openThread(id);
+    const r = await api(`/api/threads/${id}/messages`, { body, verdict });
+    if (r.implied_verdict) $('#thread').insertAdjacentHTML('afterbegin', `<div class="hint" style="padding:6px 16px">Read as <b>${r.implied_verdict === 'approve' ? 'approval' : 'refusal'}</b> — thread is now ${r.status}.</div>`);
+    openThread(id);
   };
   $('#send').onclick = () => post(null);
   $('#body').onkeydown = (e) => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') post(null); };

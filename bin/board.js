@@ -56,6 +56,28 @@ switch (cmd) {
     break;
   }
 
+  case 'todo': { // what actually needs the human, everywhere
+    const items = await api('/api/todo');
+    if (!items.length) { console.log('nothing needs you.'); break; }
+    for (const i of items) {
+      const head = i.attention === 'action' ? (i.paused ? 'PAUSED ' : 'DECIDE ') : 'REPLY  ';
+      console.log(`${head} #${i.thread_id}  [${i.project}] ${i.title}${i.asked_by ? `  — ${i.asked_by}` : ''}`);
+      const q = (i.attention === 'action' ? i.question : i.last?.body) ?? '';
+      for (const line of q.split('\n').slice(0, 4)) console.log(`         ${line}`);
+      if (i.attention === 'action' && i.status === 'awaiting_human') console.log(`         → board ok ${i.thread_id}   |   board no ${i.thread_id} "reason"`);
+      console.log();
+    }
+    break;
+  }
+
+  case 'ok': case 'no': { // board ok <thread> ["note"] — decide in one word
+    if (!pos[0]) usage();
+    const note = pos.slice(1).join(' ') || (cmd === 'ok' ? 'ok' : 'non');
+    const r = await api(`/api/threads/${pos[0]}/messages`, { body: note, verdict: cmd === 'ok' ? 'approve' : 'reject' });
+    console.log(`thread #${pos[0]} → ${r.status}`);
+    break;
+  }
+
   case 'post': { // board post <thread_id> "text" [--verdict approve|request_changes|reject]
     const r = await api(`/api/threads/${pos[0]}/messages`, { body: pos.slice(1).join(' '), verdict: opt('--verdict', null) });
     console.log(`posted #${r.id} (thread status: ${r.status})`);
@@ -284,6 +306,9 @@ function usage() {
   board setup <project> [--agent provider]            print MCP configs + the agent prompt for a project
   board service install|uninstall|restart|status      keep the server always running (launchd / systemd --user)
   board projects | threads <project> [--status all] | read <thread_id>
+  board todo                                          everything that actually needs you (all projects)
+  board ok <thread_id> ["note"] | board no <thread_id> ["reason"]
+                                                      decide a thread waiting on you, in one word
   board post <thread_id> "text" [--verdict approve|request_changes|reject]
   board ask <project> "title" "body" [--critical]
   board tail [project]                                live stream of everything said

@@ -23,7 +23,8 @@ const PROTOCOL = [
   'You share this board with other agents (possibly other providers) and with the human, who reads everything.',
   '1. Start: board_join (pick your name), board_status, then board_inbox. If "Project context" is empty or stale, write it with board_context.',
   '2. While working: board_claim the paths you edit; board_journal at each milestone (what you did, what is next, what is uncertain).',
-  '3. Someone asked you something you cannot answer right away: board_ack "working" (or "declined" if it is not for you) so they know whether to wait. Answer when you can.',
+  '3. Settle questions between agents; escalate to the human (board_ask critical=true) only for genuinely irreversible choices, formatted so they can answer "ok".',
+  '3b. Someone asked you something you cannot answer right away: board_ack "working" (or "declined" if it is not for you) so they know whether to wait. Answer when you can.',
   '4. Before an irreversible or architecture-level choice: board_ask with critical=true and wait (board_wait) for the human.',
   '5. When a step is done: board_request_review; act on verdicts.',
   '6. Before finishing: board_journal a handoff note, board_release your claims, update board_context if the picture changed.',
@@ -189,7 +190,7 @@ export function buildMcpServer(store, ctx) {
     });
 
   reg('board_ask',
-    `Open a question to the other agents and the human. Set critical=true for decisions that are hard to reverse (schema changes, deleting data, architecture, security, spending, anything you would want a senior engineer to sign off on): the thread then waits for the human's explicit approval — do not proceed until board_read shows status "approved". Use to=[...] to ask specific agents for their opinion.`,
+    `Ask the other agents. Default use: settle a question between yourselves (use to=[...] for specific agents) — the human reads the board but is not there to arbitrate routine work. Set critical=true ONLY for choices that are genuinely hard to undo or outside your mandate (destroying/migrating data, security or auth model, spending money, sending anything outside this machine, product direction, changing the board itself): the thread then waits for the human's explicit approval and you must not proceed until board_read shows status "approved". A critical ask must be answerable in five seconds — one-sentence decision, then "Recommendation:", "If yes:", "If no:", "Why it needs you:" — so the human can reply "ok".`,
     { title: z.string().min(1), body: z.string().min(1).describe('context, options considered, your recommendation'), critical: z.boolean().optional(), to: z.array(z.string()).optional() },
     ({ title, body, critical = false, to = [] }) => {
       const t = store.createThread(agent, { projectId: pid, kind: critical ? 'decision' : 'question', title, body, mentions: to });

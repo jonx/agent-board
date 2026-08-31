@@ -56,3 +56,62 @@ test('wait resolves on new message', async () => {
   assert.equal(await w, true);
   assert.equal(await s.waitForInbox(a, p.id, 30), false);
 });
+
+test('attention model: only what concerns the human is flagged', () => {
+  const s = new Store(openDatabase(':memory:'));
+  const a = s.ensureAgent('a'), b = s.ensureAgent('b'), p = s.ensureProject('p'), h = s.human();
+  s.join(a, p); s.join(b, p);
+  const idx = () => Object.fromEntries(s.threadsIndex().map(t => [t.title, t.attention]));
+
+  s.createThread(a, { projectId: p.id, kind: 'status', title: 'a — journal', body: 'progress' });
+  s.createThread(a, { projectId: p.id, kind: 'question', title: 'agent chat', body: 'which lib? @b' });
+  const rev = s.createThread(a, { projectId: p.id, kind: 'review', title: 'review', body: 'please look', mentions: ['all'] });
+  s.systemPost(p.id, 'board updated');
+  assert.deepEqual(idx(), { 'a — journal': 'ambient', 'agent chat': 'ambient', review: 'ambient', 'Board updates': 'ambient' },
+    'agent-to-agent work, journals and board notices never demand the human');
+
+  const dec = s.createThread(a, { projectId: p.id, kind: 'decision', title: 'drop table', body: 'irreversible' });
+  assert.equal(idx()['drop table'], 'action', 'a decision waits for the human');
+
+  s.post(b, { threadId: rev.id, body: 'ping @human, need your call on the licence' });
+  assert.equal(idx().review, 'reply', 'an explicit @human mention reaches the human');
+
+  const chat = s.listThreads(p.id, { status: 'all' }).find(t => t.title === 'agent chat');
+  s.post(h, { threadId: chat.id, body: 'I would use the stdlib' });
+  assert.equal(idx()['agent chat'], 'ambient', 'a thread the human just answered is settled');
+  s.post(a, { threadId: chat.id, body: 'ok, doing that' });
+  assert.equal(idx()['agent chat'], 'reply', 'someone replied to the human: back in their list');
+
+  // Resolving the decision takes it off the list.
+  s.post(h, { threadId: dec.id, body: 'ok' });
+  assert.equal(idx()['drop table'], 'ambient');
+});
+
+test('one word from the human decides a thread waiting on them', () => {
+  const s = new Store(openDatabase(':memory:'));
+  const a = s.ensureAgent('a'), p = s.ensureProject('p'), h = s.human();
+  s.join(a, p);
+  const mk = (title) => s.createThread(a, { projectId: p.id, kind: 'decision', title, body: 'Drop the legacy table?' });
+
+  let t = mk('d1');
+  let r = s.post(h, { threadId: t.id, body: 'ok' });
+  assert.equal(r.implied_verdict, 'approve');
+  assert.equal(s.getThread(t.id).status, 'approved');
+
+  t = mk('d2');
+  r = s.post(h, { threadId: t.id, body: 'non' });
+  assert.equal(s.getThread(t.id).status, 'rejected');
+
+  t = mk('d3');
+  r = s.post(h, { threadId: t.id, body: 'ok but rename the column first' });
+  assert.equal(r.implied_verdict, undefined, 'a qualified answer is a comment, never a silent approval');
+  assert.equal(s.getThread(t.id).status, 'awaiting_human');
+
+  // Only on threads that are actually waiting, and only from the human.
+  const q = s.createThread(a, { projectId: p.id, kind: 'question', title: 'q', body: 'x' });
+  s.post(h, { threadId: q.id, body: 'ok' });
+  assert.equal(s.getThread(q.id).status, 'open');
+  const t2 = mk('d4');
+  s.post(a, { threadId: t2.id, body: 'ok' });
+  assert.equal(s.getThread(t2.id).status, 'awaiting_human', 'an agent saying ok decides nothing');
+});
