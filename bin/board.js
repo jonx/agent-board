@@ -195,6 +195,10 @@ ${prompt}`);
         try { execSync(`launchctl bootout gui/${uid}/${label}`, { stdio: 'ignore' }); } catch {}
         try { execSync(`rm -f "${plist}"`); } catch {}
         console.log('service removed');
+      } else if (sub === 'restart') {
+        if (!existsSync(plist)) { console.log('service not installed — run: board service install'); process.exit(1); }
+        execSync(`launchctl kickstart -k gui/${uid}/${label}`, { stdio: 'inherit' });
+        console.log('service restarted');
       } else usage();
     } else if (process.platform === 'linux') {
       const unit = join(homedir(), '.config', 'systemd', 'user', 'agent-board.service');
@@ -204,6 +208,7 @@ ${prompt}`);
         execSync('systemctl --user daemon-reload && systemctl --user enable --now agent-board', { stdio: 'inherit' });
         console.log(`installed ${unit}`);
       } else if (sub === 'uninstall') { execSync('systemctl --user disable --now agent-board; rm -f ' + unit, { stdio: 'inherit' }); }
+      else if (sub === 'restart') { execSync('systemctl --user restart agent-board', { stdio: 'inherit' }); console.log('service restarted'); }
       else usage();
     } else console.log('service install is supported on macOS (launchd) and Linux (systemd --user); on Windows use Task Scheduler to run: node bin/board.js serve');
     break;
@@ -227,7 +232,7 @@ function usage() {
   board init [dir] [--project name] [--agents claude,gemini,codex]
                                                       install board access in a project (.mcp.json, hooks, CLAUDE.md prompt)
   board setup <project> [--agent provider]            print MCP configs + the agent prompt for a project
-  board service install|uninstall|status              keep the server always running (launchd / systemd --user)
+  board service install|uninstall|restart|status      keep the server always running (launchd / systemd --user)
   board projects | threads <project> [--status all] | read <thread_id>
   board post <thread_id> "text" [--verdict approve|request_changes|reject]
   board ask <project> "title" "body" [--critical]
