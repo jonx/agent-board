@@ -18,7 +18,9 @@
   .badge.h { background:var(--warn-bg); color:var(--warn); border-color:var(--warn) } .badge.k { text-transform:uppercase; letter-spacing:.3px }
   .badge.approved { color:var(--ok); border-color:var(--ok) } .badge.rejected, .badge.changes_requested { color:var(--bad); border-color:var(--bad) } .badge.paused { color:var(--bad); border-color:var(--bad); font-weight:600 }
   .tabs { display:flex; gap:4px; padding:8px; border-bottom:1px solid var(--line); position:sticky; top:0; background:var(--panel); z-index:1 }
-  .tabs button { flex:1 } button { font:inherit; padding:5px 10px; border-radius:6px; border:1px solid var(--line); background:var(--panel); color:var(--fg); cursor:pointer } button:hover { border-color:var(--accent) } button.on { background:var(--accent); color:#fff; border-color:var(--accent) }
+  .tabs button { flex:1; white-space:nowrap; padding:5px 4px; font-size:13px; min-width:0 } .tabs .n { display:inline-block; margin-left:4px; min-width:16px; padding:0 4px; border-radius:8px; background:var(--accent); color:#fff; font-size:11px; line-height:16px; text-align:center } .tabs button.on .n { background:#fff; color:var(--accent) }
+  .item.unread .t { font-weight:700 } .item.unread .t::before { content:''; width:7px; height:7px; border-radius:50%; background:var(--accent); flex:none }
+  button { font:inherit; padding:5px 10px; border-radius:6px; border:1px solid var(--line); background:var(--panel); color:var(--fg); cursor:pointer } button:hover { border-color:var(--accent) } button.on { background:var(--accent); color:#fff; border-color:var(--accent) }
   button.ok { border-color:var(--ok); color:var(--ok) } button.bad { border-color:var(--bad); color:var(--bad) } button.warn { border-color:var(--warn); color:var(--warn) }
   .thead { padding:12px 16px; border-bottom:1px solid var(--line); background:var(--panel); position:sticky; top:0; z-index:1 } .thead h2 { margin:0 0 4px; font-size:16px } .thead .row { display:flex; gap:6px; align-items:center; flex-wrap:wrap; font-size:12px; color:var(--muted) }
   .msgs { padding:12px 16px; flex:1 } .msg { display:grid; grid-template-columns:110px 1fr; gap:10px; padding:10px 0; border-bottom:1px solid var(--line) }
@@ -85,6 +87,12 @@ const api = async (path, body) => {
   return data;
 };
 
+// ---- what the human has already seen (per browser) ----
+const READ = (() => { try { return JSON.parse(localStorage.getItem('board_read') || '{}'); } catch { return {}; } })();
+const saveRead = () => { try { localStorage.setItem('board_read', JSON.stringify(READ)); } catch {} };
+const isUnread = (t) => (t.last_message_id ?? 0) > (READ['t' + t.id] ?? 0);
+const teamKey = () => 'team' + S.project;
+
 // ---- state ----
 const S = { projects: [], project: null, filter: 'attention', threads: [], thread: null, messages: [], detail: null, agents: [] };
 try { S.project = Number(localStorage.getItem('board_project')) || null; } catch {}
@@ -104,14 +112,24 @@ async function loadProjects() {
 }
 async function selectProject(id) { S.project = id; try { localStorage.setItem('board_project', id); } catch {} S.thread = null; $('#thread').innerHTML = '<div class="empty">Pick a thread.</div>'; await loadProjects(); }
 
+const ACTIVE = new Set(['open', 'awaiting_human', 'changes_requested']);
+const needsMe = (t) => t.status === 'awaiting_human' || t.paused_reason || (t.kind === 'review' && t.status === 'open');
 async function loadThreads() {
   if (!S.project) return;
+  const [all, detail] = await Promise.all([api(`/api/projects/${S.project}/threads?limit=200`), api(`/api/projects/${S.project}`)]);
+  S.detail = detail;
+  const lists = { attention: all.filter(needsMe), active: all.filter(t => ACTIVE.has(t.status)), all };
+  const teamNew = detail.context && (READ[teamKey()] ?? 0) < detail.context.id;
+  for (const b of document.querySelectorAll('.tabs button')) {
+    const f = b.dataset.f, label = b.dataset.label ?? (b.dataset.label = b.textContent.trim());
+    const n = f === 'team' ? (teamNew ? 1 : 0) : lists[f].filter(isUnread).length;
+    b.innerHTML = label + (n ? `<span class="n">${f === 'team' ? '•' : n}</span>` : '');
+    b.title = n ? (f === 'team' ? 'project context updated' : `${n} thread(s) with new messages`) : '';
+  }
   if (S.filter === 'team') return renderTeam();
-  const status = S.filter === 'all' ? '' : 'status=active&';
-  let list = await api(`/api/projects/${S.project}/threads?${status}limit=200`);
-  if (S.filter === 'attention') list = list.filter(t => t.status === 'awaiting_human' || t.paused_reason || (t.kind === 'review' && t.status === 'open'));
+  const list = lists[S.filter];
   S.threads = list;
-  $('#threads').innerHTML = list.map(t => `<div class="item ${t.id === S.thread ? 'sel' : ''}" data-id="${t.id}">
+  $('#threads').innerHTML = list.map(t => `<div class="item ${t.id === S.thread ? 'sel' : ''} ${isUnread(t) ? 'unread' : ''}" data-id="${t.id}">
       <div class="t"><span class="badge k">${t.kind}</span> ${esc(t.title)}</div>
       <div class="m"><span class="badge ${t.status}">${t.status.replace('_', ' ')}</span>${t.paused_reason ? '<span class="badge paused">paused</span>' : ''}<span>${esc(t.created_by_name)}</span><span>${t.message_count} msg</span><span>${fmt(t.updated_at)}</span></div></div>`).join('')
     || `<div class="empty">${S.filter === 'attention' ? 'Nothing needs you right now.' : 'No threads.'}</div>`;
@@ -119,12 +137,13 @@ async function loadThreads() {
 }
 
 async function renderTeam() {
-  const d = S.detail = await api(`/api/projects/${S.project}`);
+  const d = S.detail ?? (S.detail = await api(`/api/projects/${S.project}`));
+  if (d.context) { READ[teamKey()] = d.context.id; saveRead(); document.querySelector('.tabs button[data-f=team]').innerHTML = 'Team'; }
   const pauseBtn = (a) => token && a.role !== 'human' ? `<button class="${a.paused_reason ? 'ok' : 'bad'}" data-pause-agent="${a.id}" data-paused="${a.paused_reason ? 1 : 0}">${a.paused_reason ? 'resume' : 'pause'}</button>` : '';
   $('#threads').innerHTML = `<div class="side">
     <h3>Project</h3><div class="li"><span class="n">${esc(d.project.name)}<br><small style="color:var(--muted)">${esc(d.project.path || 'no path registered')}</small></span></div>
     <h3>Context (latest brief)</h3>${d.context ? `<div class="ctx">${render(d.context.body)}</div><div class="li" style="color:var(--muted)">by ${esc(d.context.author)} · ${fmt(d.context.created_at)} · <a href="#" data-open="${d.context_thread_id}">history</a></div>` : '<div class="li" style="color:var(--muted)">No project context written yet.</div>'}
-    <h3>Members</h3>${d.members.map(a => `<div class="li"><span class="n">${esc(a.name)} <small style="color:var(--muted)">${esc(a.provider || '')}${a.paused_reason ? ' · PAUSED: ' + esc(a.paused_reason) : ''}</small></span>${pauseBtn(a)}</div>`).join('') || '<div class="li">—</div>'}
+    <h3>Members</h3>${d.members.map(a => `<div class="li"><span class="n">${a.live ? '<span class="dot live" title="connected now"></span> ' : ''}${esc(a.name)} <small style="color:var(--muted)">${esc(a.provider || '')}${a.paused_reason ? ' · PAUSED: ' + esc(a.paused_reason) : ''}</small></span>${pauseBtn(a)}</div>`).join('') || '<div class="li">—</div>'}
     <h3>Active claims</h3>${d.claims.map(c => `<div class="li"><span class="n"><code>${esc(c.path)}</code> — ${esc(c.agent)}${c.note ? ' · ' + esc(c.note) : ''}</span></div>`).join('') || '<div class="li">none</div>'}
     <h3>Tasks</h3>${d.tasks.map(t => `<div class="li"><span class="n"><span class="badge">${t.status}</span> ${esc(t.title)}${t.owner ? ' · ' + esc(t.owner) : ''}</span></div>`).join('') || '<div class="li">none</div>'}
   </div>`;
@@ -141,6 +160,8 @@ async function openThread(id) {
   S.thread = id;
   const { thread: t, messages } = await api(`/api/threads/${id}`);
   S.messages = messages;
+  if (messages.length) { READ['t' + id] = messages[messages.length - 1].id; saveRead(); }
+  document.querySelector(`#threads .item[data-id="${id}"]`)?.classList.remove('unread');
   $('#threads').querySelectorAll('.item').forEach(i => i.classList.toggle('sel', Number(i.dataset.id) === id));
   const can = !!token;
   const gated = !!t.needs_human;
@@ -158,6 +179,7 @@ async function openThread(id) {
         <span class="sp"></span>
         <button class="ok" data-v="approve">Approve</button><button class="warn" data-v="request_changes">Request changes</button><button class="bad" data-v="reject">Reject</button></div></div>` : ''}`;
   $('#thread .msgs').scrollIntoView(false);
+  loadThreads();
   if (!can) return;
   const post = async (verdict) => {
     const body = $('#body').value.trim() || (verdict ? verdict.replace('_', ' ') : '');

@@ -3,7 +3,8 @@
 import { readFileSync, existsSync, writeFileSync, mkdirSync, copyFileSync, chmodSync } from 'node:fs';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { spawn } from 'node:child_process';
+import { spawn, execSync } from 'node:child_process';
+import { homedir } from 'node:os';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const { startServer, DEFAULT_DATA_DIR, DEFAULT_PORT } = await import(join(ROOT, 'src', 'server.js'));
@@ -98,7 +99,7 @@ switch (cmd) {
     const name = opt('--project', dir.split('/').filter(Boolean).pop().toLowerCase().replace(/[^a-z0-9._-]/g, '-'));
     const agents = opt('--agents', 'claude').split(',').map(s => s.trim()).filter(Boolean);
     const url = (a) => `${BASE}/mcp/${name}/${a}`;
-    const promptFor = (a) => readFileSync(join(ROOT, 'docs', 'AGENT_PROMPT.md'), 'utf8').replaceAll('{PROJECT}', name).replaceAll('{AGENT}', a).replaceAll('{BOARD_URL}', BASE);
+    const promptFor = (a) => readFileSync(join(ROOT, 'docs', 'AGENT_PROMPT.md'), 'utf8').replaceAll('{PROJECT}', name).replaceAll('{PROVIDER}', a).replaceAll('{BOARD_URL}', BASE);
     const MARK = '<!-- agent-board:start -->', END = '<!-- agent-board:end -->';
     const writeJson = (f, mut) => { let j = {}; if (existsSync(f)) j = JSON.parse(readFileSync(f, 'utf8')); mut(j); writeFileSync(f, JSON.stringify(j, null, 2) + '\n'); console.log('  wrote', f); };
     const addPrompt = (f, a) => {
@@ -112,8 +113,9 @@ switch (cmd) {
       if (a === 'claude') {
         writeJson(join(dir, '.mcp.json'), j => { (j.mcpServers ??= {}).board = { type: 'http', url: url('claude') }; });
         mkdirSync(join(dir, '.claude'), { recursive: true });
-        copyFileSync(join(ROOT, 'configs', 'claude-code', 'board-inbox.sh'), join(dir, '.claude', 'board-inbox.sh')); chmodSync(join(dir, '.claude', 'board-inbox.sh'), 0o755);
-        const hook = { type: 'command', command: `sh "$CLAUDE_PROJECT_DIR"/.claude/board-inbox.sh ${name} claude` };
+        writeFileSync(join(dir, '.claude', 'board-inbox.sh'), readFileSync(join(ROOT, 'configs', 'claude-code', 'board-inbox.sh'), 'utf8').replace('__BOARD_ROOT__', ROOT)); chmodSync(join(dir, '.claude', 'board-inbox.sh'), 0o755);
+        console.log('  wrote', join(dir, '.claude', 'board-inbox.sh'));
+        const hook = { type: 'command', command: `sh "$CLAUDE_PROJECT_DIR"/.claude/board-inbox.sh ${name}` };
         writeJson(join(dir, '.claude', 'settings.json'), j => {
           j.hooks ??= {};
           for (const ev of ['SessionStart', 'UserPromptSubmit']) {
@@ -134,7 +136,8 @@ switch (cmd) {
         console.log(`  ${a}: point its MCP client at ${url(a)} (see \`board setup ${name}\`)`);
       }
     }
-    console.log(`Done. Claude Code will ask once to trust the project's .mcp.json. Hooks need curl. Re-run to update.`);
+    console.log(`Done. Each session picks its own agent name with board_join (several sessions of one provider work side by side).
+Claude Code asks once to trust the project's .mcp.json. Hooks need curl. Re-run to update. Keep the server always on: board service install`);
     break;
   }
 
@@ -142,7 +145,7 @@ switch (cmd) {
     const name = pos[0]; if (!name) usage();
     const agent = opt('--agent', '<agent-name>');
     const url = (a) => `${BASE}/mcp/${name}/${a}`;
-    const prompt = readFileSync(join(ROOT, 'docs', 'AGENT_PROMPT.md'), 'utf8').replaceAll('{PROJECT}', name).replaceAll('{AGENT}', agent).replaceAll('{BOARD_URL}', BASE);
+    const prompt = readFileSync(join(ROOT, 'docs', 'AGENT_PROMPT.md'), 'utf8').replaceAll('{PROJECT}', name).replaceAll('{PROVIDER}', agent === '<agent-name>' ? 'claude' : agent).replaceAll('{BOARD_URL}', BASE);
     console.log(`# Claude Code (project .mcp.json, or: claude mcp add --transport http board ${url('claude')})
 { "mcpServers": { "board": { "type": "http", "url": "${url('claude')}" } } }
 
@@ -159,8 +162,50 @@ url = "${url('codex')}"
 # OpenCode (opencode.json)
 { "mcp": { "board": { "type": "remote", "url": "${url('opencode')}" } } }
 
-# ---- Paste into CLAUDE.md / AGENTS.md / GEMINI.md (replace {AGENT} by the agent name used in the URL) ----
+# ---- Paste into CLAUDE.md / AGENTS.md / GEMINI.md (the last URL segment is the *provider*; each session picks its name with board_join) ----
 ${prompt}`);
+    break;
+  }
+
+  case 'service': { // board service install|uninstall|status — keep the board always running
+    const sub = pos[0] ?? 'status';
+    const node = process.execPath, log = join(DEFAULT_DATA_DIR, 'server.log');
+    const reachable = await fetch(BASE + '/api/projects').then(r => r.ok).catch(() => false);
+    if (sub === 'status') { console.log(reachable ? `board reachable at ${BASE}` : `board NOT reachable at ${BASE}`); break; }
+    if (process.platform === 'darwin') {
+      const label = 'com.agent-board.server', plist = join(homedir(), 'Library', 'LaunchAgents', `${label}.plist`);
+      const uid = execSync('id -u').toString().trim();
+      if (sub === 'install') {
+        mkdirSync(dirname(plist), { recursive: true }); mkdirSync(DEFAULT_DATA_DIR, { recursive: true });
+        writeFileSync(plist, `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>${label}</string>
+  <key>ProgramArguments</key><array><string>${node}</string><string>${join(ROOT, 'bin', 'board.js')}</string><string>serve</string></array>
+  <key>RunAtLoad</key><true/><key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>${log}</string><key>StandardErrorPath</key><string>${log}</string>
+  <key>EnvironmentVariables</key><dict><key>PATH</key><string>${dirname(node)}:/usr/bin:/bin</string></dict>
+</dict></plist>
+`);
+        if (reachable) console.log(`note: something already serves ${BASE} (your manual \`board serve\`?). Stop it; the service will take over within seconds.`);
+        try { execSync(`launchctl bootout gui/${uid}/${label}`, { stdio: 'ignore' }); } catch {}
+        execSync(`launchctl bootstrap gui/${uid} "${plist}"`, { stdio: 'inherit' });
+        console.log(`installed ${plist} — starts at login, restarts if it dies, logs in ${log}`);
+      } else if (sub === 'uninstall') {
+        try { execSync(`launchctl bootout gui/${uid}/${label}`, { stdio: 'ignore' }); } catch {}
+        try { execSync(`rm -f "${plist}"`); } catch {}
+        console.log('service removed');
+      } else usage();
+    } else if (process.platform === 'linux') {
+      const unit = join(homedir(), '.config', 'systemd', 'user', 'agent-board.service');
+      if (sub === 'install') {
+        mkdirSync(dirname(unit), { recursive: true });
+        writeFileSync(unit, `[Unit]\nDescription=agent-board\n[Service]\nExecStart=${node} ${join(ROOT, 'bin', 'board.js')} serve\nRestart=always\n[Install]\nWantedBy=default.target\n`);
+        execSync('systemctl --user daemon-reload && systemctl --user enable --now agent-board', { stdio: 'inherit' });
+        console.log(`installed ${unit}`);
+      } else if (sub === 'uninstall') { execSync('systemctl --user disable --now agent-board; rm -f ' + unit, { stdio: 'inherit' }); }
+      else usage();
+    } else console.log('service install is supported on macOS (launchd) and Linux (systemd --user); on Windows use Task Scheduler to run: node bin/board.js serve');
     break;
   }
 
@@ -181,7 +226,8 @@ function usage() {
   board open                                          open the human UI in the browser
   board init [dir] [--project name] [--agents claude,gemini,codex]
                                                       install board access in a project (.mcp.json, hooks, CLAUDE.md prompt)
-  board setup <project> [--agent name]                print MCP configs + the agent prompt for a project
+  board setup <project> [--agent provider]            print MCP configs + the agent prompt for a project
+  board service install|uninstall|status              keep the server always running (launchd / systemd --user)
   board projects | threads <project> [--status all] | read <thread_id>
   board post <thread_id> "text" [--verdict approve|request_changes|reject]
   board ask <project> "title" "body" [--critical]

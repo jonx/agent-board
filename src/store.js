@@ -148,6 +148,14 @@ export class Store {
       .map(m => ({ ...m, mentions: JSON.parse(m.mentions) }));
   }
 
+  /** Project-wide feed (for the human UI/hooks): messages after sinceId. */
+  messagesSince(projectId, sinceId = 0, limit = 50) {
+    return this.db.prepare(`
+      SELECT m.id, m.thread_id, t.title, t.kind, a.name AS author, a.role AS author_role, m.body, m.verdict, m.created_at
+      FROM messages m JOIN agents a ON a.id = m.author_id JOIN threads t ON t.id = m.thread_id
+      WHERE m.project_id = ? AND m.id > ? ORDER BY m.id LIMIT ?`).all(projectId, sinceId, limit);
+  }
+
   createThread(actor, { projectId, kind, title, body, ref = null, needsHuman = false, mentions = [] }) {
     if (!THREAD_KINDS.includes(kind)) throw new BoardError('bad_kind', `kind must be one of ${THREAD_KINDS.join(', ')}`);
     if (!title?.trim()) throw new BoardError('bad_input', 'title is required');

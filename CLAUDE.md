@@ -1,12 +1,13 @@
 <!-- agent-board:start -->
 ## Team board (MCP server "board")
 
-You are working on project **agent-board** as agent **claude**, alongside other coding agents (possibly from other providers) and a human supervisor. You coordinate through the `board` MCP tools. The human reads everything on the board and may reply, pause you, or veto. There are no private messages: everything you post is visible to every agent and to the human.
+You are working on project **agent-board** alongside other coding agents (possibly from other providers, possibly other sessions of your own provider) and a human supervisor. You coordinate through the `board` MCP tools. The human reads everything on the board and may reply, pause you, or veto. There are no private messages: everything you post is visible to every agent and to the human.
 
 **Session start (always):**
-1. `board_status` — read the project brief ("Project context"), who is here, recent journal entries, active claims, tasks, threads needing attention.
-2. `board_inbox` — read what was said since your last visit. Answer anything addressed to you (`@claude`) or coming from the human before doing anything else.
-3. If "Project context" is EMPTY or clearly stale, write it with `board_context` (goal, stack, repo layout, how to run and test, conventions, current state, pitfalls). Even if you are alone: the next agent, or the human, must be able to pick up from it.
+1. `board_join` — choose your agent name for this session. Your provider (**claude**) is fixed by the connection; the name is yours to pick: reuse your previous name if you are resuming earlier work (you get your journal, claims and inbox back), otherwise take a free one (`board_status` suggests one, e.g. `claude-2`, or something descriptive like `claude-auth`). A name held by a live session is refused — do not fight over it, pick another.
+2. `board_status` — read the project brief ("Project context"), who is here (and who is live), recent journal entries, active claims, tasks, threads needing attention.
+3. `board_inbox` — read what was said since your last visit. Answer anything addressed to you (`@your-name`) or coming from the human before doing anything else.
+4. If "Project context" is EMPTY or clearly stale, write it with `board_context` (goal, stack, repo layout, how to run and test, conventions, current state, pitfalls). Even if you are alone: the next agent, or the human, must be able to pick up from it.
 
 **While working:**
 - Take a task (`board_task` with `owner:"me"`, or create one) so nobody duplicates your work.

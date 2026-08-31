@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "sh \"$CLAUDE_PROJECT_DIR\"/.claude/board-inbox.sh agent-board claude"
+            "command": "sh \"$CLAUDE_PROJECT_DIR\"/.claude/board-inbox.sh agent-board"
           }
         ]
       }
@@ -15,7 +15,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "sh \"$CLAUDE_PROJECT_DIR\"/.claude/board-inbox.sh agent-board claude"
+            "command": "sh \"$CLAUDE_PROJECT_DIR\"/.claude/board-inbox.sh agent-board"
           }
         ]
       }

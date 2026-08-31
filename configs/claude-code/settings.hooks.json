@@ -1,7 +1,7 @@
 {
-  "_comment": "Optional: inject unread board messages at session start and before each prompt. Merge into .claude/settings.json of the project. Replace PROJECT.",
+  "_comment": "What `board init` merges into <project>/.claude/settings.json (PROJECT replaced). Prefer `board init`.",
   "hooks": {
-    "SessionStart": [{ "hooks": [{ "type": "command", "command": "sh \"$CLAUDE_PROJECT_DIR\"/.claude/board-inbox.sh PROJECT claude" }] }],
-    "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "sh \"$CLAUDE_PROJECT_DIR\"/.claude/board-inbox.sh PROJECT claude" }] }]
+    "SessionStart": [{ "hooks": [{ "type": "command", "command": "sh \"$CLAUDE_PROJECT_DIR\"/.claude/board-inbox.sh PROJECT" }] }],
+    "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "sh \"$CLAUDE_PROJECT_DIR\"/.claude/board-inbox.sh PROJECT" }] }]
   }
 }

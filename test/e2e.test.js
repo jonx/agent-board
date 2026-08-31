@@ -12,10 +12,11 @@ const dir = mkdtempSync(join(process.env.TMPDIR ?? tmpdir(), 'agent-board-'));
 const { server, base, humanToken, store } = await startServer({ port: 0, dataDir: dir, quiet: true });
 const humanApi = (path, body) => fetch(base + path, body ? { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${humanToken}` }, body: JSON.stringify(body) } : {}).then(async r => ({ status: r.status, data: await r.json() }));
 
-async function agent(project, name) {
+async function agent(project, name, provider = name.split('-')[0]) {
   const c = new Client({ name: `${name}-test`, version: '0' });
-  await c.connect(new StreamableHTTPClientTransport(new URL(`${base}/mcp/${project}/${name}`)));
+  await c.connect(new StreamableHTTPClientTransport(new URL(`${base}/mcp/${project}/${provider}`)));
   const call = async (tool, args = {}) => { const r = await c.callTool({ name: tool, arguments: args }); const text = r.content[0].text; let data; try { data = JSON.parse(text); } catch { throw new Error(`${tool}: ${text}`); } if (r.isError) { const e = new Error(data.message); e.data = data; throw e; } return data; };
+  if (name) await call('board_join', { name });
   return { c, call };
 }
 
@@ -26,6 +27,18 @@ test('two providers coordinate through the board with the human watching', async
   const codex = await agent('demo', 'codex');
   const tools = (await claude.c.listTools()).tools.map(t => t.name);
   assert.ok(tools.includes('board_status') && tools.includes('board_ask'));
+
+  // Sessions pick their own names; a live name cannot be taken, a foreign provider's name neither.
+  const anon = await agent('demo', null, 'claude');
+  const pre = await anon.call('board_status');
+  assert.equal(pre.joined, false); assert.match(pre.how, /claude-2/);
+  await assert.rejects(anon.call('board_inbox'), /board_join first/);
+  await assert.rejects(anon.call('board_join', { name: 'claude' }), /another live session/);
+  await assert.rejects(anon.call('board_join', { name: 'codex' }), /belongs to provider codex/);
+  await assert.rejects(anon.call('board_join', { name: 'human' }), /human account/);
+  await anon.call('board_join', { name: 'claude-2' });
+  assert.equal((await anon.call('board_status')).you.name, 'claude-2');
+  await anon.c.close();
 
   // First agent alone: brief is empty, it writes context + journal.
   let st = await claude.call('board_status', { project_path: '/tmp/demo' });
@@ -77,7 +90,7 @@ test('two providers coordinate through the board with the human watching', async
   assert.equal(noTok.status, 403);
   assert.equal((await fetch(`${base}/api/threads/${q.id}`)).status, 200);
   // Nobody can register as the human over MCP.
-  await assert.rejects(agent('demo', 'human'));
+  await assert.rejects(agent('demo', 'human', 'claude'), /human account/);
 
   // Multi-project isolation + log integrity + UI served.
   const other = await agent('other', 'gemini');

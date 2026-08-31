@@ -1,5 +1,7 @@
-// MCP surface for agents. One server instance is built per request (stateless
-// Streamable HTTP), bound to the {agent, project} identity taken from the URL.
+// MCP surface for agents. One server instance per MCP session (stateful Streamable
+// HTTP). The URL fixes the project and the provider (/mcp/<project>/<provider>); the
+// session picks its own agent name with board_join, so several sessions of the same
+// provider can work side by side as distinct agents — no environment variables.
 // Every tool here acts *as an agent*: nothing on this surface can approve a gated
 // decision, pause anyone, or touch the human account (test/invariants.test.js checks the names).
 
@@ -9,7 +11,7 @@ import { BoardError } from './store.js';
 import { THREAD_KINDS, TASK_STATUSES, VERDICTS } from './db.js';
 
 export const TOOL_NAMES = [
-  'board_status', 'board_inbox', 'board_wait', 'board_threads', 'board_read', 'board_post',
+  'board_join', 'board_status', 'board_inbox', 'board_wait', 'board_threads', 'board_read', 'board_post',
   'board_ask', 'board_request_review', 'board_propose_board_change', 'board_resolve',
   'board_journal', 'board_context', 'board_tasks', 'board_task', 'board_claim', 'board_release',
 ];
@@ -18,7 +20,7 @@ export const CONTEXT_THREAD_TITLE = 'Project context';
 
 const PROTOCOL = [
   'You share this board with other agents (possibly other providers) and with the human, who reads everything.',
-  '1. Start: board_status, then board_inbox. If "Project context" is empty or stale, write it with board_context.',
+  '1. Start: board_join (pick your name), board_status, then board_inbox. If "Project context" is empty or stale, write it with board_context.',
   '2. While working: board_claim the paths you edit; board_journal at each milestone (what you did, what is next, what is uncertain).',
   '3. Before an irreversible or architecture-level choice: board_ask with critical=true and wait (board_wait) for the human.',
   '4. When a step is done: board_request_review; act on verdicts.',
@@ -33,10 +35,18 @@ function fail(e) {
 }
 const wrap = (fn) => async (args) => { try { return ok(await fn(args ?? {})); } catch (e) { return fail(e); } };
 
-export function buildMcpServer(store, agent, project) {
-  const server = new McpServer({ name: 'agent-board', version: '0.1.0' });
-  const pid = project.id;
-  const reg = (name, description, inputSchema, fn) => server.registerTool(name, { description, inputSchema }, wrap(fn));
+/**
+ * ctx = { project, provider, sessionId, agent: null|row, registry }
+ * registry.holder(name) -> sessionId of a live session bound to that name, or null.
+ * registry.bind(sessionId, agentName)
+ */
+export function buildMcpServer(store, ctx) {
+  const server = new McpServer({ name: 'agent-board', version: '0.2.0' });
+  const project = ctx.project, pid = project.id;
+  let agent = ctx.agent ?? null;
+  const needAgent = () => { if (!agent) throw new BoardError('not_joined', 'call board_join first: choose your agent name for this session'); return agent; };
+  const reg = (name, description, inputSchema, fn, { open = false } = {}) =>
+    server.registerTool(name, { description, inputSchema }, wrap((args) => { if (!open) needAgent(); return fn(args); }));
   const summary = (t) => ({ id: t.id, kind: t.kind, title: t.title, status: t.status, needs_human: !!t.needs_human, paused: t.paused_reason ?? null, by: t.created_by_name, ref: t.ref ?? undefined, messages: t.message_count, updated_at: t.updated_at });
 
   const contextThread = () => store.db.prepare(`SELECT id FROM threads WHERE project_id = ? AND kind = 'status' AND title = ?`).get(pid, CONTEXT_THREAD_TITLE);
@@ -49,26 +59,53 @@ export function buildMcpServer(store, agent, project) {
       SELECT m.body, m.created_at, a.name AS author FROM messages m JOIN threads t ON t.id = m.thread_id JOIN agents a ON a.id = m.author_id
       WHERE t.project_id = ? AND t.kind = 'status' AND t.title <> ? ORDER BY m.id DESC LIMIT ?`).all(pid, CONTEXT_THREAD_TITLE, limit).reverse();
 
+  const suggestName = () => {
+    const taken = new Set(store.listAgents().map(a => a.name));
+    for (let i = 1; ; i++) { const n = i === 1 ? ctx.provider : `${ctx.provider}-${i}`; if (!taken.has(n) && !ctx.registry.holder(n)) return n; }
+  };
+
+  reg('board_join',
+    `First call of every session. Choose the agent name you will be known by on this project (lowercase, e.g. "${ctx.provider}", "${ctx.provider}-2", "${ctx.provider}-auth"). Your provider is fixed by the connection (${ctx.provider}). A name held by another live session is refused — pick another. Reusing your own previous name resumes its journal, claims and inbox.`,
+    { name: z.string().min(1).max(40).describe('your agent name for this session'), project_path: z.string().optional().describe('absolute path of the project root, registers it if unknown') },
+    ({ name, project_path }) => {
+      name = String(name).trim().toLowerCase();
+      const existing = store.getAgent(name);
+      if (existing && existing.role !== 'human' && existing.provider && existing.provider !== ctx.provider) throw new BoardError('name_taken', `"${name}" belongs to provider ${existing.provider}; choose a name for ${ctx.provider}`, { suggestion: suggestName() });
+      const holder = ctx.registry.holder(name);
+      if (holder && holder !== ctx.sessionId) throw new BoardError('name_in_use', `"${name}" is used by another live session right now; pick another name`, { suggestion: suggestName() });
+      agent = store.ensureAgent(name, ctx.provider);
+      if (project_path) store.ensureProject(project.name, project_path, agent);
+      store.join(agent, store.getProject(pid));
+      ctx.registry.bind(ctx.sessionId, agent.name);
+      ctx.agent = agent;
+      return { joined: true, you: { name: agent.name, provider: agent.provider }, project: { id: pid, name: project.name, path: store.getProject(pid).path }, unread: store.unreadCount(agent, pid), next: 'board_status, then board_inbox' };
+    }, { open: true });
+
   reg('board_status',
-    `Your entry point. Returns the project brief (latest "Project context"), who is here, recent journal entries, active path claims, tasks in progress, threads that need attention, and your unread count. Call it when you start a session. Optionally registers the project's root path.`,
+    `Your entry point after board_join. Returns the project brief (latest "Project context"), who is here, recent journal entries, active path claims, tasks in progress, threads that need attention, and your unread count. Before joining it only tells you how to join.`,
     { project_path: z.string().optional().describe('Absolute path of the project root, to register it if unknown') },
     ({ project_path }) => {
+      if (!agent) {
+        return { joined: false, project: { id: pid, name: project.name }, provider: ctx.provider, protocol: PROTOCOL,
+          how: `Call board_join with a name. Suggested free name: "${suggestName()}".`,
+          agents_on_this_project: store.members(pid).map(m => ({ name: m.name, provider: m.provider, live: !!ctx.registry.holder(m.name), last_seen_at: m.last_seen_at })) };
+      }
       if (project_path) store.ensureProject(project.name, project_path, agent);
       const p = store.getProject(pid);
-      const ctx = latestContext();
+      const brief = latestContext();
       return {
         you: { name: agent.name, provider: agent.provider, paused: agent.paused_reason ?? null },
         project: { id: p.id, name: p.name, path: p.path },
         protocol: PROTOCOL,
-        project_context: ctx ?? 'EMPTY — you are probably the first agent here. Write a brief with board_context (goal, stack, layout, conventions, current state) so the next agent can start without re-discovering everything.',
-        members: store.members(pid).map(m => ({ name: m.name, role: m.role, provider: m.provider, paused: !!m.paused_reason, last_seen_at: m.last_seen_at })),
+        project_context: brief ?? 'EMPTY — you are probably the first agent here. Write a brief with board_context (goal, stack, layout, conventions, current state) so the next agent can start without re-discovering everything.',
+        members: store.members(pid).map(m => ({ name: m.name, role: m.role, provider: m.provider, paused: !!m.paused_reason, live: !!ctx.registry.holder(m.name), last_seen_at: m.last_seen_at })),
         recent_journal: recentJournal(),
         active_claims: store.activeClaims(pid).map(c => ({ path: c.path, by: c.agent, note: c.note, expires_at: c.expires_at })),
         tasks_in_progress: store.listTasks(pid).filter(t => t.status !== 'done').map(t => ({ id: t.id, title: t.title, status: t.status, owner: t.owner })),
         threads_needing_attention: store.listThreads(pid, { status: 'active' }).filter(t => t.kind !== 'status').map(summary),
         unread: store.unreadCount(agent, pid),
       };
-    });
+    }, { open: true });
 
   reg('board_inbox',
     'Unread messages in this project (from every agent and the human), grouped by thread. Marks them read unless peek=true. Messages from the human and threads mentioning you come first.',

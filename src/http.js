@@ -4,21 +4,39 @@
 
 import http from 'node:http';
 import { readFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { buildMcpServer, CONTEXT_THREAD_TITLE } from './mcp.js';
 import { BoardError } from './store.js';
 
-export function createHttpServer({ store, humanToken, uiFile }) {
+/** Live MCP sessions: which session holds which agent name. A name is "live" while its
+ *  session made a request in the last SESSION_TTL ms; after that another session may take it. */
+export class SessionRegistry {
+  constructor(ttlMs = 10 * 60_000) { this.ttl = ttlMs; this.sessions = new Map(); }
+  add(id, entry) { this.sessions.set(id, { ...entry, agentName: null, lastSeen: Date.now() }); }
+  get(id) { return this.sessions.get(id); }
+  touch(id) { const e = this.sessions.get(id); if (e) e.lastSeen = Date.now(); }
+  remove(id) { this.sessions.delete(id); }
+  bind(id, agentName) { const e = this.sessions.get(id); if (e) e.agentName = agentName; }
+  holder(agentName) {
+    for (const [id, e] of this.sessions) if (e.agentName === agentName && Date.now() - e.lastSeen < this.ttl) return id;
+    return null;
+  }
+  sweep() { for (const [id, e] of this.sessions) if (Date.now() - e.lastSeen > this.ttl * 6) { e.transport?.close?.(); this.sessions.delete(id); } }
+}
+
+export function createHttpServer({ store, humanToken, uiFile, registry = new SessionRegistry() }) {
   const human = store.human();
+  const sweeper = setInterval(() => registry.sweep(), 60_000); sweeper.unref();
 
   return http.createServer(async (req, res) => {
     const url = new URL(req.url, 'http://localhost');
     const path = url.pathname;
     try {
-      // ---- MCP for agents: /mcp/<project>/<agent> ----
+      // ---- MCP for agents: /mcp/<project>/<provider> ----
       const m = path.match(/^\/mcp\/([^/]+)\/([^/]+)\/?$/);
-      if (m) return await handleMcp(req, res, m[1], m[2], url.searchParams.get('provider') || providerFromUA(req.headers['user-agent']));
-      if (path === '/mcp' || path === '/mcp/') return json(res, 400, { error: 'use /mcp/<project>/<agent>' });
+      if (m) return await handleMcp(req, res, decodeURIComponent(m[1]), decodeURIComponent(m[2]));
+      if (path === '/mcp' || path === '/mcp/') return json(res, 400, { error: 'use /mcp/<project>/<provider>' });
 
       if (path === '/' || path === '/index.html') {
         res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
@@ -34,20 +52,29 @@ export function createHttpServer({ store, humanToken, uiFile }) {
     }
   });
 
-  async function handleMcp(req, res, projectName, agentName, provider) {
-    let agent, project;
-    try {
-      agent = store.ensureAgent(decodeURIComponent(agentName), provider);
-      project = store.ensureProject(decodeURIComponent(projectName), null, agent);
-      store.join(agent, project);
-    } catch (e) {
-      return json(res, 400, { error: e.code ?? 'bad_request', message: e.message });
-    }
-    const server = buildMcpServer(store, agent, project);
-    const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
-    res.on('close', () => { transport.close(); server.close(); });
-    await server.connect(transport);
+  async function handleMcp(req, res, projectName, provider) {
     const body = req.method === 'POST' ? await readJson(req) : undefined;
+    const sid = req.headers['mcp-session-id'];
+    const existing = sid ? registry.get(sid) : null;
+    if (existing) {
+      if (existing.projectName !== projectName || existing.provider !== provider) return json(res, 400, { error: 'session_mismatch', message: 'this session belongs to another project/provider URL' });
+      registry.touch(sid);
+      return existing.transport.handleRequest(req, res, body);
+    }
+    if (sid && !existing) return json(res, 404, { error: 'session_not_found', message: 'session expired or server restarted — re-initialize and board_join again' });
+    if (req.method !== 'POST') return json(res, 405, { error: 'method', message: 'initialize first (POST)' });
+    if (!/^[a-z0-9][a-z0-9._-]{0,39}$/.test(provider)) return json(res, 400, { error: 'bad_provider', message: 'provider must be like claude, codex, gemini' });
+    let project;
+    try { project = store.ensureProject(projectName, null, null); } catch (e) { return json(res, 400, { error: e.code ?? 'bad_request', message: e.message }); }
+    const ctx = { project, provider, sessionId: null, agent: null, registry };
+    const transport = new StreamableHTTPServerTransport({
+      sessionIdGenerator: () => randomUUID(),
+      enableJsonResponse: true,
+      onsessioninitialized: (id) => { ctx.sessionId = id; registry.add(id, { transport, projectName, provider }); },
+    });
+    transport.onclose = () => { if (ctx.sessionId) registry.remove(ctx.sessionId); };
+    const server = buildMcpServer(store, ctx);
+    await server.connect(transport);
     await transport.handleRequest(req, res, body);
   }
 
@@ -89,7 +116,11 @@ export function createHttpServer({ store, humanToken, uiFile }) {
         const pr = store.getProject(id(seg[1])); if (!pr) return json(res, 404, { error: 'not_found' });
         const ctx = store.db.prepare(`SELECT id FROM threads WHERE project_id = ? AND kind='status' AND title = ?`).get(pr.id, CONTEXT_THREAD_TITLE);
         const ctxMsgs = ctx ? store.threadMessages(ctx.id) : [];
-        return json(res, 200, { project: pr, members: store.members(pr.id), tasks: store.listTasks(pr.id), claims: store.activeClaims(pr.id), context: ctxMsgs[ctxMsgs.length - 1] ?? null, context_thread_id: ctx?.id ?? null });
+        return json(res, 200, { project: pr, members: store.members(pr.id).map(m => ({ ...m, live: !!registry.holder(m.name) })), tasks: store.listTasks(pr.id), claims: store.activeClaims(pr.id), context: ctxMsgs[ctxMsgs.length - 1] ?? null, context_thread_id: ctx?.id ?? null });
+      }
+      if (seg[0] === 'projects' && seg[2] === 'messages') { // feed: /api/projects/<id|name>/messages?since=ID
+        const pr = store.getProject(/^\d+$/.test(seg[1]) ? id(seg[1]) : seg[1]); if (!pr) return json(res, 404, { error: 'not_found' });
+        return json(res, 200, { last_id: store.db.prepare('SELECT COALESCE(max(id),0) AS n FROM messages WHERE project_id = ?').get(pr.id).n, messages: store.messagesSince(pr.id, Number(q.get('since') ?? 0), Number(q.get('limit') ?? 50)) });
       }
       if (seg[0] === 'projects' && seg[2] === 'threads') return json(res, 200, store.listThreads(id(seg[1]), { status: q.get('status') || null, kind: q.get('kind') || null, limit: Number(q.get('limit') ?? 100) }));
       if (seg[0] === 'threads' && seg[1] && !seg[2]) {
@@ -113,12 +144,6 @@ export function createHttpServer({ store, humanToken, uiFile }) {
     if (seg[0] === 'agents' && seg[2] === 'pause') { store.pauseAgent(actor, id(seg[1]), body.reason ?? null); return json(res, 200, store.getAgent(id(seg[1]))); }
     return json(res, 404, { error: 'not found' });
   }
-}
-
-function providerFromUA(ua = '') {
-  ua = ua.toLowerCase();
-  for (const k of ['claude', 'codex', 'openai', 'gemini', 'cursor', 'opencode', 'copilot', 'aider']) if (ua.includes(k)) return k;
-  return null;
 }
 
 function json(res, status, data) {
