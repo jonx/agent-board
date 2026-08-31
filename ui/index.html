@@ -15,14 +15,15 @@
   .split { cursor:col-resize; background:var(--line); position:relative; z-index:2 } .split:hover, .split.on { background:var(--accent) }
   body.dragging { cursor:col-resize; user-select:none } body.dragging main > * { pointer-events:none }
   .item { padding:10px 12px; border-bottom:1px solid var(--line); cursor:pointer; min-width:0 } .item:hover { background:var(--sel) } .item.sel { background:var(--sel); box-shadow: inset 3px 0 0 var(--accent) }
-  .item .t { font-weight:600; display:flex; gap:6px; align-items:center; white-space:nowrap; overflow:hidden; text-overflow:ellipsis } .item .t > * { flex:none } .item .t .title { flex:0 1 auto; overflow:hidden; text-overflow:ellipsis; min-width:0 }
+  .item .t { font-weight:600; display:flex; gap:6px; align-items:center; white-space:nowrap; overflow:hidden; text-overflow:ellipsis }
+  .count { display:inline-block; min-width:17px; padding:0 5px; border-radius:9px; background:var(--accent); color:#fff; font-size:11px; line-height:17px; text-align:center; font-weight:600; flex:none } .item .t > * { flex:none } .item .t .title { flex:0 1 auto; overflow:hidden; text-overflow:ellipsis; min-width:0 }
   .item .m { color:var(--muted); font-size:12px; margin-top:2px; display:flex; gap:8px; white-space:nowrap; overflow:hidden }
   .badge { font-size:11px; padding:1px 6px; border-radius:10px; border:1px solid var(--line); color:var(--muted); white-space:nowrap }
   .badge.h { background:var(--warn-bg); color:var(--warn); border-color:var(--warn) } .badge.k { text-transform:uppercase; letter-spacing:.3px }
   .badge.approved { color:var(--ok); border-color:var(--ok) } .badge.rejected, .badge.changes_requested { color:var(--bad); border-color:var(--bad) } .badge.paused { color:var(--bad); border-color:var(--bad); font-weight:600 }
   .tabs { display:flex; gap:4px; padding:8px; border-bottom:1px solid var(--line); position:sticky; top:0; background:var(--panel); z-index:1; width:max-content; min-width:100% }
   .tabs button { white-space:nowrap; padding:5px 9px; font-size:13px } .tabs .n { display:inline-block; margin-left:4px; min-width:16px; padding:0 4px; border-radius:8px; background:var(--accent); color:#fff; font-size:11px; line-height:16px; text-align:center } .tabs button.on .n { background:#fff; color:var(--accent) }
-  .item.unread .t { font-weight:700 } .item.unread .t::before { content:''; width:7px; height:7px; border-radius:50%; background:var(--accent); flex:none }
+  .item.unread .t { font-weight:700 } section .item.unread .t::before { content:''; width:7px; height:7px; border-radius:50%; background:var(--accent); flex:none }
   button { font:inherit; padding:5px 10px; border-radius:6px; border:1px solid var(--line); background:var(--panel); color:var(--fg); cursor:pointer } button:hover { border-color:var(--accent) } button.on { background:var(--accent); color:#fff; border-color:var(--accent) }
   button.ok { border-color:var(--ok); color:var(--ok) } button.bad { border-color:var(--bad); color:var(--bad) } button.warn { border-color:var(--warn); color:var(--warn) }
   .thead { padding:12px 16px; border-bottom:1px solid var(--line); background:var(--panel); position:sticky; top:0; z-index:1 } .thead h2 { margin:0 0 4px; font-size:16px } .thead .row { display:flex; gap:6px; align-items:center; flex-wrap:wrap; font-size:12px; color:var(--muted) }
@@ -142,14 +143,21 @@ const S = { projects: [], project: null, filter: 'attention', threads: [], threa
 try { S.project = Number(localStorage.getItem('board_project')) || null; } catch {}
 
 async function loadProjects() {
-  S.projects = await api('/api/projects');
-  S.agents = await api('/api/agents');
+  const [projects, agents, index] = await Promise.all([api('/api/projects'), api('/api/agents'), api('/api/threads-index')]);
+  S.projects = projects; S.agents = agents;
+  // Same definition of "unread" as the tabs: a thread whose last message the human has not opened.
+  S.unreadByProject = {};
+  for (const t of index) if ((t.last_message_id ?? 0) > (READ['t' + t.id] ?? 0)) S.unreadByProject[t.project_id] = (S.unreadByProject[t.project_id] ?? 0) + 1;
   const el = $('#projects');
-  el.innerHTML = S.projects.map(p => `<div class="item ${p.id === S.project ? 'sel' : ''}" data-id="${p.id}"><div class="t"><span class="title">${esc(p.name)}</span>${p.awaiting_human ? `<span class="badge h">${p.awaiting_human} waiting</span>` : ''}</div><div class="m">${p.open_threads} active${p.archived ? ' · archived' : ''}</div></div>`).join('') || '<div class="empty">No project yet.<br>One is created when the first agent connects.</div>';
+  el.innerHTML = S.projects.map(p => {
+    const n = S.unreadByProject[p.id] ?? 0;
+    return `<div class="item ${p.id === S.project ? 'sel' : ''} ${n ? 'unread' : ''}" data-id="${p.id}"><div class="t"><span class="title">${esc(p.name)}</span>${n ? `<span class="count" title="${n} thread(s) with messages you have not read">${n}</span>` : ''}${p.awaiting_human ? `<span class="badge h">${p.awaiting_human} waiting</span>` : ''}</div><div class="m">${p.open_threads} active${p.archived ? ' · archived' : ''}</div></div>`;
+  }).join('') || '<div class="empty">No project yet.<br>One is created when the first agent connects.</div>';
   el.querySelectorAll('.item').forEach(i => i.onclick = () => selectProject(Number(i.dataset.id)));
   $('#newThread').disabled = !S.project || !token;
   const totalWaiting = S.projects.reduce((n, p) => n + p.awaiting_human, 0);
-  document.title = (totalWaiting ? `(${totalWaiting}) ` : '') + 'agent-board';
+  const totalUnread = Object.values(S.unreadByProject).reduce((a, b) => a + b, 0);
+  document.title = (totalWaiting ? `(${totalWaiting}!) ` : totalUnread ? `(${totalUnread}) ` : '') + 'agent-board';
   if (S.project && !S.projects.some(p => p.id === S.project)) S.project = null;
   if (!S.project && S.projects[0]) return selectProject(S.projects[0].id);
   if (S.project) await loadThreads();
@@ -207,6 +215,7 @@ async function openThread(id) {
   S.messages = messages;
   if (messages.length) { READ['t' + id] = messages[messages.length - 1].id; saveRead(); }
   document.querySelector(`#threads .item[data-id="${id}"]`)?.classList.remove('unread');
+  loadProjects();
   $('#threads').querySelectorAll('.item').forEach(i => i.classList.toggle('sel', Number(i.dataset.id) === id));
   const can = !!token;
   const gated = !!t.needs_human;

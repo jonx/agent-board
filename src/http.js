@@ -105,6 +105,7 @@ export function createHttpServer({ store, humanToken, uiFile, registry = new Ses
     if (req.method === 'GET') {
       if (p === '/api/projects') return json(res, 200, store.listProjects());
       if (p === '/api/agents') return json(res, 200, store.listAgents());
+      if (p === '/api/threads-index') return json(res, 200, store.threadsIndex());
       if (p === '/api/verify') return json(res, 200, store.verifyChain());
       if (p === '/api/version') return json(res, 200, { version: store.getMeta('board_version') });
       if (p === '/api/events') return json(res, 200, store.listEvents(q.get('project_id') ? id(q.get('project_id')) : null, Number(q.get('limit') ?? 100)));

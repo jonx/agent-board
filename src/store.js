@@ -149,6 +149,15 @@ export class Store {
       .map(m => ({ ...m, mentions: JSON.parse(m.mentions) }));
   }
 
+  /** Compact index for the UI: every thread with its last message id, so one source of
+   *  truth ("has the human read this thread?") drives both the project list and the tabs. */
+  threadsIndex() {
+    return this.db.prepare(`
+      SELECT t.id, t.project_id, t.kind, t.status, t.needs_human,
+             (SELECT max(m.id) FROM messages m WHERE m.thread_id = t.id) AS last_message_id
+      FROM threads t JOIN projects p ON p.id = t.project_id WHERE p.archived = 0`).all();
+  }
+
   /** Project-wide feed (for the human UI/hooks): messages after sinceId. */
   messagesSince(projectId, sinceId = 0, limit = 50) {
     return this.db.prepare(`
