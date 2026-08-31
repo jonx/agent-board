@@ -40,9 +40,18 @@ test('two providers coordinate through the board with the human watching', async
   assert.equal((await anon.call('board_status')).you.name, 'claude-2');
   await anon.c.close();
 
+
   // First agent alone: brief is empty, it writes context + journal.
   let st = await claude.call('board_status', { project_path: '/tmp/demo' });
   assert.match(String(st.project_context), /EMPTY/);
+
+  // Agents can list projects, and a path registered under another name triggers a warning.
+  const typo = await agent('demo-typo', null, 'claude');
+  const listed = await typo.call('board_projects');
+  assert.ok(listed.projects.some(p => p.name === 'demo' && p.path === '/tmp/demo'));
+  const j = await typo.call('board_join', { name: 'claude-3', project_path: '/tmp/demo' });
+  assert.match(j.warnings.join(' '), /already registered as project "demo"/);
+  await typo.c.close();
   await claude.call('board_context', { body: 'Goal: demo app. Stack: node. Run: npm test.' });
   await claude.call('board_journal', { body: 'Started on auth module.' });
   await claude.call('board_claim', { paths: ['src/auth/'], note: 'auth' });

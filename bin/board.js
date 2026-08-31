@@ -96,7 +96,16 @@ switch (cmd) {
 
   case 'init': { // board init [dir] [--project name] [--agents claude,gemini]
     const dir = resolve(pos[0] ?? '.');
-    const name = opt('--project', dir.split('/').filter(Boolean).pop().toLowerCase().replace(/[^a-z0-9._-]/g, '-'));
+    let name = opt('--project', null);
+    const known = await fetch(BASE + '/api/projects').then(r => r.json()).catch(() => []);
+    const registered = known.find(p => p.path && p.path.replace(/\/+$/, '') === dir.replace(/\/+$/, ''));
+    if (!name) {
+      name = registered ? registered.name : dir.split('/').filter(Boolean).pop().toLowerCase().replace(/[^a-z0-9._-]/g, '-');
+      if (registered) console.log(`this directory is already registered on the board as project "${name}" — reusing it`);
+    } else if (registered && registered.name !== name) {
+      console.log(`WARNING: this directory is already registered as project "${registered.name}", but you asked for "${name}". Two projects for one repo is confusing; Ctrl-C now if that was not intended.`);
+    }
+    if (!registered && known.length) console.log(`existing projects: ${known.map(p => p.name).join(', ')} — creating/using "${name}"`);
     const agents = opt('--agents', 'claude').split(',').map(s => s.trim()).filter(Boolean);
     const url = (a) => `${BASE}/mcp/${name}/${a}`;
     const promptFor = (a) => readFileSync(join(ROOT, 'docs', 'AGENT_PROMPT.md'), 'utf8').replaceAll('{PROJECT}', name).replaceAll('{PROVIDER}', a).replaceAll('{BOARD_URL}', BASE);
@@ -171,6 +180,17 @@ ${prompt}`);
     const [project, name, tool, jsonArgs] = pos;
     if (!project || !name || !tool) usage();
     const provider = opt('--provider', name.split('-')[0]);
+    if (!rest.includes('--create')) {
+      const known = await api('/api/projects');
+      if (!known.some(p => p.name === project)) {
+        const cwd = process.cwd().replace(/\/+$/, '');
+        const byPath = known.find(p => p.path && (cwd === p.path.replace(/\/+$/, '') || cwd.startsWith(p.path.replace(/\/+$/, '') + '/')));
+        console.error(`project "${project}" does not exist on the board.` + (byPath ? ` The current directory is registered as project "${byPath.name}" — use that name.` : ''));
+        console.error(`existing projects:\n` + (known.map(p => `  ${p.name}\t${p.path ?? ''}`).join('\n') || '  (none)'));
+        console.error(`to really create a new project named "${project}", add --create`);
+        process.exit(1);
+      }
+    }
     let args = {};
     if (jsonArgs) { try { args = JSON.parse(jsonArgs); } catch { console.error('arguments must be a JSON object, e.g. \'{"body":"hello"}\''); process.exit(1); } }
     const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
@@ -256,7 +276,7 @@ function usage() {
   board post <thread_id> "text" [--verdict approve|request_changes|reject]
   board ask <project> "title" "body" [--critical]
   board tail [project]                                live stream of everything said
-  board as <project> <name> <tool> ['{json}']         act as an agent without MCP (e.g. board as app claude board_inbox)
+  board as <project> <name> <tool> ['{json}']         act as an agent without MCP (e.g. board as app claude board_inbox); --create for a new project
   board verify                                        verify the append-only hash chain
   (BOARD_URL, BOARD_PORT, BOARD_DATA env vars are honoured)`);
   process.exit(cmd ? 1 : 0);

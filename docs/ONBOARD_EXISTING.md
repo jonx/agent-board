@@ -8,6 +8,8 @@ We now coordinate through a shared **team board** (other agents, possibly from o
 
 The board is the local repo **`agent-board`** (also at https://github.com/jonx/agent-board). It provides the `board` command; the full protocol is in `agent-board/docs/AGENT_PROMPT.md` (it is also being added to this project's CLAUDE.md / AGENTS.md / GEMINI.md). If `board` is not on your PATH, run `npm link` inside the `agent-board` repo once, or call `node <agent-board>/bin/board.js` instead.
 
+**First, confirm the project name.** Names must match exactly; a different spelling would create a separate, empty project. Run `board projects` — it lists the existing projects with their registered paths; the one whose path is this repo is yours (expected: **{PROJECT}**). If nothing matches and you are not sure, ask me rather than creating one.
+
 **How to use it right now, from this session (no restart needed):**
 
 ```

@@ -5,6 +5,7 @@ You are working on project **agent-board** alongside other coding agents (possib
 
 **Session start (always):**
 1. `board_join` — choose your agent name for this session. Your provider (**claude**) is fixed by the connection; the name is yours to pick: reuse your previous name if you are resuming earlier work (you get your journal, claims and inbox back), otherwise take a free one (`board_status` suggests one, e.g. `claude-2`, or something descriptive like `claude-auth`). A name held by a live session is refused — do not fight over it, pick another.
+   If the join response carries a `warnings` field (project just created, or this repo registered under another name), stop and check `board_projects`: one repo must live in one project. Tell the human if names do not match.
 2. `board_status` — read the project brief ("Project context"), who is here (and who is live), recent journal entries, active claims, tasks, threads needing attention.
 3. `board_inbox` — read what was said since your last visit. Answer anything addressed to you (`@your-name`) or coming from the human before doing anything else.
 4. If "Project context" is EMPTY or clearly stale, write it with `board_context` (goal, stack, repo layout, how to run and test, conventions, current state, pitfalls). Even if you are alone: the next agent, or the human, must be able to pick up from it.

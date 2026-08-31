@@ -11,7 +11,7 @@ import { BoardError } from './store.js';
 import { THREAD_KINDS, TASK_STATUSES, VERDICTS } from './db.js';
 
 export const TOOL_NAMES = [
-  'board_join', 'board_status', 'board_inbox', 'board_wait', 'board_threads', 'board_read', 'board_post',
+  'board_projects', 'board_join', 'board_status', 'board_inbox', 'board_wait', 'board_threads', 'board_read', 'board_post',
   'board_ask', 'board_request_review', 'board_propose_board_change', 'board_resolve',
   'board_journal', 'board_context', 'board_tasks', 'board_task', 'board_claim', 'board_release',
 ];
@@ -27,6 +27,8 @@ const PROTOCOL = [
   '5. Before finishing: board_journal a handoff note, board_release your claims, update board_context if the picture changed.',
   'Everything you post is public to the whole project. There are no private messages.',
 ];
+
+function samePath(a, b) { const n = (x) => String(x).replace(/\/+$/, ''); return n(a) === n(b); }
 
 function ok(data) { return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] }; }
 function fail(e) {
@@ -64,6 +66,15 @@ export function buildMcpServer(store, ctx) {
     for (let i = 1; ; i++) { const n = i === 1 ? ctx.provider : `${ctx.provider}-${i}`; if (!taken.has(n) && !ctx.registry.holder(n)) return n; }
   };
 
+  const projectList = () => store.listProjects().filter(p => !p.archived).map(p => ({
+    name: p.name, path: p.path, this_connection: p.id === pid, open_threads: p.open_threads,
+    members: store.members(p.id).map(m => m.name).join(', '), last_message_id: p.last_message_id }));
+
+  reg('board_projects',
+    `List the projects that exist on this board (name, registered path, members, activity). Use it to check you are on the right one: project names must match exactly, a typo or a different spelling creates a separate, empty project. This connection is bound to "${project.name}". If the repo you work in is registered under another name, stop and tell the human (or reconnect with the right name).`,
+    {},
+    () => ({ this_connection: project.name, projects: projectList() }), { open: true });
+
   reg('board_join',
     `First call of every session. Choose the agent name you will be known by on this project (lowercase, e.g. "${ctx.provider}", "${ctx.provider}-2", "${ctx.provider}-auth"). Your provider is fixed by the connection (${ctx.provider}). A name held by another live session is refused — pick another. Reusing your own previous name resumes its journal, claims and inbox.`,
     { name: z.string().min(1).max(40).describe('your agent name for this session'), project_path: z.string().optional().describe('absolute path of the project root, registers it if unknown') },
@@ -74,11 +85,18 @@ export function buildMcpServer(store, ctx) {
       const holder = ctx.registry.holder(name);
       if (holder && holder !== ctx.sessionId) throw new BoardError('name_in_use', `"${name}" is used by another live session right now; pick another name`, { suggestion: suggestName() });
       agent = store.ensureAgent(name, ctx.provider);
-      if (project_path) store.ensureProject(project.name, project_path, agent);
-      store.join(agent, store.getProject(pid));
+      const warnings = [];
+      if (project_path) {
+        const other = store.listProjects().find(p => p.id !== pid && p.path && samePath(p.path, project_path));
+        if (other) warnings.push(`WARNING: the path ${project_path} is already registered as project "${other.name}". You are connected to "${project.name}" — probably a naming mismatch. Do not work in two projects for one repo: tell the human, or reconnect to "${other.name}".`);
+        else store.ensureProject(project.name, project_path, agent);
+      }
+      const fresh = store.getProject(pid);
+      if (!fresh.path && store.members(pid).length === 0) warnings.push(`NOTE: project "${project.name}" was created by your connection and has no history. If this repo already has a project under another name (see board_projects), you are on the wrong one.`);
+      store.join(agent, fresh);
       ctx.registry.bind(ctx.sessionId, agent.name);
       ctx.agent = agent;
-      return { joined: true, you: { name: agent.name, provider: agent.provider }, project: { id: pid, name: project.name, path: store.getProject(pid).path }, unread: store.unreadCount(agent, pid), next: 'board_status, then board_inbox' };
+      return { joined: true, you: { name: agent.name, provider: agent.provider }, project: { id: pid, name: project.name, path: fresh.path }, unread: store.unreadCount(agent, pid), ...(warnings.length ? { warnings } : {}), next: 'board_status, then board_inbox' };
     }, { open: true });
 
   reg('board_status',
@@ -87,7 +105,8 @@ export function buildMcpServer(store, ctx) {
     ({ project_path }) => {
       if (!agent) {
         return { joined: false, project: { id: pid, name: project.name }, provider: ctx.provider, protocol: PROTOCOL,
-          how: `Call board_join with a name. Suggested free name: "${suggestName()}".`,
+          how: `Call board_join with a name (pass project_path so the repo is registered). Suggested free name: "${suggestName()}". Check board_projects if unsure this is the right project.`,
+        other_projects: projectList().filter(p => !p.this_connection).map(p => p.name),
           agents_on_this_project: store.members(pid).map(m => ({ name: m.name, provider: m.provider, live: !!ctx.registry.holder(m.name), last_seen_at: m.last_seen_at })) };
       }
       if (project_path) store.ensureProject(project.name, project_path, agent);
