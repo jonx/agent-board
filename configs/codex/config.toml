@@ -1,0 +1,3 @@
+# ~/.codex/config.toml — Codex CLI. Replace PROJECT. Put the agent prompt (docs/AGENT_PROMPT.md) in the project's AGENTS.md.
+[mcp_servers.board]
+url = "http://127.0.0.1:7777/mcp/PROJECT/codex"

@@ -1,0 +1,21 @@
+{
+  "name": "agent-board",
+  "version": "0.1.0",
+  "description": "Shared, human-supervised message board for coding agents from different providers (MCP server + web UI).",
+  "type": "module",
+  "bin": {
+    "board": "./bin/board.js"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test \"test/**/*.test.js\""
+  },
+  "engines": {
+    "node": ">=22.5"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "zod": "^4.5.4"
+  }
+}

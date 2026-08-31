@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>agent-board</title>
+<style>
+  :root { --bg:#f6f7f9; --panel:#fff; --line:#e3e6ea; --fg:#1b1f24; --muted:#687078; --accent:#2f6fed; --warn:#b7791f; --warn-bg:#fff7e6; --ok:#1f8a4c; --bad:#c0392b; --human:#7c3aed; --human-bg:#f3eeff; --sel:#eaf0ff; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#0f1216; --panel:#171b21; --line:#2a3039; --fg:#e6e9ee; --muted:#8b95a3; --accent:#5b8cff; --warn:#e0a62a; --warn-bg:#2a2310; --ok:#3fbf73; --bad:#ff6b5b; --human:#b794f6; --human-bg:#241c33; --sel:#1d2a45; } }
+  * { box-sizing:border-box } body { margin:0; font:14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background:var(--bg); color:var(--fg); height:100vh; display:grid; grid-template-rows:44px 1fr; }
+  header { display:flex; align-items:center; gap:14px; padding:0 14px; border-bottom:1px solid var(--line); background:var(--panel); }
+  header h1 { font-size:15px; margin:0; } header .sp { flex:1 } header .tok { font-size:12px; color:var(--muted) } header .tok.ok { color:var(--ok) }
+  main { display:grid; grid-template-columns:220px 340px 1fr; min-height:0; }
+  aside, section { border-right:1px solid var(--line); overflow:auto; background:var(--panel); min-height:0 } article { overflow:auto; display:flex; flex-direction:column; min-height:0 }
+  .item { padding:10px 12px; border-bottom:1px solid var(--line); cursor:pointer } .item:hover { background:var(--sel) } .item.sel { background:var(--sel); box-shadow: inset 3px 0 0 var(--accent) }
+  .item .t { font-weight:600; display:flex; gap:6px; align-items:center } .item .m { color:var(--muted); font-size:12px; margin-top:2px; display:flex; gap:8px; flex-wrap:wrap }
+  .badge { font-size:11px; padding:1px 6px; border-radius:10px; border:1px solid var(--line); color:var(--muted); white-space:nowrap }
+  .badge.h { background:var(--warn-bg); color:var(--warn); border-color:var(--warn) } .badge.k { text-transform:uppercase; letter-spacing:.3px }
+  .badge.approved { color:var(--ok); border-color:var(--ok) } .badge.rejected, .badge.changes_requested { color:var(--bad); border-color:var(--bad) } .badge.paused { color:var(--bad); border-color:var(--bad); font-weight:600 }
+  .tabs { display:flex; gap:4px; padding:8px; border-bottom:1px solid var(--line); position:sticky; top:0; background:var(--panel); z-index:1 }
+  .tabs button { flex:1 } button { font:inherit; padding:5px 10px; border-radius:6px; border:1px solid var(--line); background:var(--panel); color:var(--fg); cursor:pointer } button:hover { border-color:var(--accent) } button.on { background:var(--accent); color:#fff; border-color:var(--accent) }
+  button.ok { border-color:var(--ok); color:var(--ok) } button.bad { border-color:var(--bad); color:var(--bad) } button.warn { border-color:var(--warn); color:var(--warn) }
+  .thead { padding:12px 16px; border-bottom:1px solid var(--line); background:var(--panel); position:sticky; top:0; z-index:1 } .thead h2 { margin:0 0 4px; font-size:16px } .thead .row { display:flex; gap:6px; align-items:center; flex-wrap:wrap; font-size:12px; color:var(--muted) }
+  .msgs { padding:12px 16px; flex:1 } .msg { display:grid; grid-template-columns:110px 1fr; gap:10px; padding:10px 0; border-bottom:1px solid var(--line) }
+  .msg .who { font-weight:600; font-size:13px } .msg .who small { display:block; font-weight:400; color:var(--muted); font-size:11px } .msg .body { white-space:pre-wrap; word-break:break-word }
+  .msg.human { background:var(--human-bg); margin:0 -16px; padding:10px 16px } .msg.human .who { color:var(--human) } .msg .verdict { font-weight:700; margin-bottom:4px } .mention { color:var(--accent); font-weight:600 }
+  .composer { border-top:1px solid var(--line); padding:10px 16px; background:var(--panel); position:sticky; bottom:0 } textarea { width:100%; min-height:70px; font:inherit; padding:8px; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--fg); resize:vertical }
+  .actions { display:flex; gap:6px; margin-top:6px; flex-wrap:wrap; align-items:center } .actions .sp { flex:1 }
+  .empty { padding:30px; color:var(--muted); text-align:center }
+  .side h3 { font-size:11px; text-transform:uppercase; letter-spacing:.5px; color:var(--muted); margin:14px 12px 4px } .side .li { padding:4px 12px; font-size:12px; display:flex; gap:6px; align-items:center; justify-content:space-between } .side .li .n { flex:1 } .side .li button { padding:1px 6px; font-size:11px }
+  .side .ctx { margin:0 12px 8px; padding:8px; border:1px solid var(--line); border-radius:6px; font-size:12px; white-space:pre-wrap; max-height:200px; overflow:auto; background:var(--bg) }
+  dialog { border:1px solid var(--line); border-radius:8px; background:var(--panel); color:var(--fg); padding:16px; min-width:420px } dialog label { display:block; margin:8px 0 2px; font-size:12px; color:var(--muted) } dialog input, dialog select { width:100%; font:inherit; padding:6px; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--fg) }
+  .dot { width:7px; height:7px; border-radius:50%; background:var(--muted); display:inline-block } .dot.live { background:var(--ok) }
+</style>
+</head>
+<body>
+<header>
+  <h1>agent-board</h1>
+  <span class="dot" id="live" title="live updates"></span>
+  <button id="newProject">+ project</button>
+  <button id="newThread" disabled>+ thread</button>
+  <span class="sp"></span>
+  <button id="verify" title="verify the message hash chain">verify log</button>
+  <span class="tok" id="tok">no human token — read-only</span>
+</header>
+<main>
+  <aside id="projects"></aside>
+  <section>
+    <div class="tabs"><button data-f="attention" class="on">Needs me</button><button data-f="active">Active</button><button data-f="all">All</button><button data-f="team">Team</button></div>
+    <div id="threads"></div>
+  </section>
+  <article id="thread"><div class="empty">Pick a project and a thread.<br><br>Agents connect to <code>/mcp/&lt;project&gt;/&lt;agent&gt;</code>.</div></article>
+</main>
+
+<dialog id="dlgThread"><form method="dialog">
+  <h3 style="margin:0">New thread</h3>
+  <label>Kind</label><select name="kind"><option value="question">question</option><option value="decision">decision (needs my approval)</option><option value="review">review</option><option value="status">status</option><option value="board-change">board-change</option></select>
+  <label>Title</label><input name="title" required>
+  <label>Ref (optional)</label><input name="ref">
+  <label>Message</label><textarea name="body"></textarea>
+  <label>Mention (comma separated agent names, or "all")</label><input name="mentions" value="all">
+  <div class="actions" style="margin-top:12px"><span class="sp"></span><button value="cancel">Cancel</button><button value="ok" class="on">Create</button></div>
+</form></dialog>
+<dialog id="dlgProject"><form method="dialog">
+  <h3 style="margin:0">New project</h3>
+  <label>Name (a-z 0-9 . _ -)</label><input name="name" required pattern="[a-z0-9][a-z0-9._-]*">
+  <label>Path</label><input name="path" placeholder="/Users/me/Source/foo">
+  <div class="actions" style="margin-top:12px"><span class="sp"></span><button value="cancel">Cancel</button><button value="ok" class="on">Create</button></div>
+</form></dialog>
+
+<script>
+const $ = (s, el = document) => el.querySelector(s);
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const fmt = (iso) => { const d = new Date(iso); const today = new Date().toDateString() === d.toDateString(); return today ? d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : d.toLocaleString([], {month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'}); };
+const render = (s) => esc(s).replace(/(^|[\s(])@([a-z0-9][a-z0-9._-]*)/gi, '$1<span class="mention">@$2</span>');
+
+// ---- human token ----
+let token = null;
+try { const h = new URLSearchParams(location.hash.slice(1)); if (h.get('token')) { localStorage.setItem('board_token', h.get('token')); history.replaceState(null, '', location.pathname); } token = localStorage.getItem('board_token'); } catch {}
+if (token) { $('#tok').textContent = 'human'; $('#tok').classList.add('ok'); }
+const api = async (path, body) => {
+  const r = await fetch(path, body ? { method: 'POST', headers: { 'content-type': 'application/json', ...(token ? { authorization: 'Bearer ' + token } : {}) }, body: JSON.stringify(body) } : {});
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) { alert((data.message || data.error || r.status) + (data.conflicts ? '\n' + JSON.stringify(data.conflicts, null, 2) : '')); throw new Error(data.message); }
+  return data;
+};
+
+// ---- state ----
+const S = { projects: [], project: null, filter: 'attention', threads: [], thread: null, messages: [], detail: null, agents: [] };
+try { S.project = Number(localStorage.getItem('board_project')) || null; } catch {}
+
+async function loadProjects() {
+  S.projects = await api('/api/projects');
+  S.agents = await api('/api/agents');
+  const el = $('#projects');
+  el.innerHTML = S.projects.map(p => `<div class="item ${p.id === S.project ? 'sel' : ''}" data-id="${p.id}"><div class="t">${esc(p.name)} ${p.awaiting_human ? `<span class="badge h">${p.awaiting_human} waiting</span>` : ''}</div><div class="m">${p.open_threads} active${p.archived ? ' · archived' : ''}</div></div>`).join('') || '<div class="empty">No project yet.<br>One is created when the first agent connects.</div>';
+  el.querySelectorAll('.item').forEach(i => i.onclick = () => selectProject(Number(i.dataset.id)));
+  $('#newThread').disabled = !S.project || !token;
+  const totalWaiting = S.projects.reduce((n, p) => n + p.awaiting_human, 0);
+  document.title = (totalWaiting ? `(${totalWaiting}) ` : '') + 'agent-board';
+  if (S.project && !S.projects.some(p => p.id === S.project)) S.project = null;
+  if (!S.project && S.projects[0]) return selectProject(S.projects[0].id);
+  if (S.project) await loadThreads();
+}
+async function selectProject(id) { S.project = id; try { localStorage.setItem('board_project', id); } catch {} S.thread = null; $('#thread').innerHTML = '<div class="empty">Pick a thread.</div>'; await loadProjects(); }
+
+async function loadThreads() {
+  if (!S.project) return;
+  if (S.filter === 'team') return renderTeam();
+  const status = S.filter === 'all' ? '' : 'status=active&';
+  let list = await api(`/api/projects/${S.project}/threads?${status}limit=200`);
+  if (S.filter === 'attention') list = list.filter(t => t.status === 'awaiting_human' || t.paused_reason || (t.kind === 'review' && t.status === 'open'));
+  S.threads = list;
+  $('#threads').innerHTML = list.map(t => `<div class="item ${t.id === S.thread ? 'sel' : ''}" data-id="${t.id}">
+      <div class="t"><span class="badge k">${t.kind}</span> ${esc(t.title)}</div>
+      <div class="m"><span class="badge ${t.status}">${t.status.replace('_', ' ')}</span>${t.paused_reason ? '<span class="badge paused">paused</span>' : ''}<span>${esc(t.created_by_name)}</span><span>${t.message_count} msg</span><span>${fmt(t.updated_at)}</span></div></div>`).join('')
+    || `<div class="empty">${S.filter === 'attention' ? 'Nothing needs you right now.' : 'No threads.'}</div>`;
+  $('#threads').querySelectorAll('.item').forEach(i => i.onclick = () => openThread(Number(i.dataset.id)));
+}
+
+async function renderTeam() {
+  const d = S.detail = await api(`/api/projects/${S.project}`);
+  const pauseBtn = (a) => token && a.role !== 'human' ? `<button class="${a.paused_reason ? 'ok' : 'bad'}" data-pause-agent="${a.id}" data-paused="${a.paused_reason ? 1 : 0}">${a.paused_reason ? 'resume' : 'pause'}</button>` : '';
+  $('#threads').innerHTML = `<div class="side">
+    <h3>Project</h3><div class="li"><span class="n">${esc(d.project.name)}<br><small style="color:var(--muted)">${esc(d.project.path || 'no path registered')}</small></span></div>
+    <h3>Context (latest brief)</h3>${d.context ? `<div class="ctx">${render(d.context.body)}</div><div class="li" style="color:var(--muted)">by ${esc(d.context.author)} · ${fmt(d.context.created_at)} · <a href="#" data-open="${d.context_thread_id}">history</a></div>` : '<div class="li" style="color:var(--muted)">No project context written yet.</div>'}
+    <h3>Members</h3>${d.members.map(a => `<div class="li"><span class="n">${esc(a.name)} <small style="color:var(--muted)">${esc(a.provider || '')}${a.paused_reason ? ' · PAUSED: ' + esc(a.paused_reason) : ''}</small></span>${pauseBtn(a)}</div>`).join('') || '<div class="li">—</div>'}
+    <h3>Active claims</h3>${d.claims.map(c => `<div class="li"><span class="n"><code>${esc(c.path)}</code> — ${esc(c.agent)}${c.note ? ' · ' + esc(c.note) : ''}</span></div>`).join('') || '<div class="li">none</div>'}
+    <h3>Tasks</h3>${d.tasks.map(t => `<div class="li"><span class="n"><span class="badge">${t.status}</span> ${esc(t.title)}${t.owner ? ' · ' + esc(t.owner) : ''}</span></div>`).join('') || '<div class="li">none</div>'}
+  </div>`;
+  $('#threads').querySelectorAll('[data-pause-agent]').forEach(b => b.onclick = async () => {
+    const paused = b.dataset.paused === '1';
+    const reason = paused ? null : prompt('Reason shown to the agent (it will be blocked from posting until resumed):', 'Hold on, human reviewing.');
+    if (!paused && reason == null) return;
+    await api(`/api/agents/${b.dataset.pauseAgent}/pause`, { reason }); renderTeam();
+  });
+  $('#threads').querySelectorAll('[data-open]').forEach(a => a.onclick = (e) => { e.preventDefault(); openThread(Number(a.dataset.open)); });
+}
+
+async function openThread(id) {
+  S.thread = id;
+  const { thread: t, messages } = await api(`/api/threads/${id}`);
+  S.messages = messages;
+  $('#threads').querySelectorAll('.item').forEach(i => i.classList.toggle('sel', Number(i.dataset.id) === id));
+  const can = !!token;
+  const gated = !!t.needs_human;
+  $('#thread').innerHTML = `
+    <div class="thead"><h2><span class="badge k">${t.kind}</span> ${esc(t.title)}</h2>
+      <div class="row"><span class="badge ${t.status}">${t.status.replace('_',' ')}</span>${gated ? '<span class="badge h">needs human</span>' : ''}${t.paused_reason ? `<span class="badge paused">paused: ${esc(t.paused_reason)}</span>` : ''}
+        <span>#${t.id} · by ${esc(t.created_by_name)} · ${fmt(t.created_at)}</span>${t.ref ? `<span>ref: <code>${esc(t.ref)}</code></span>` : ''}
+        <span class="sp" style="flex:1"></span>
+        ${can ? `<button class="warn" id="pauseT">${t.paused_reason ? 'resume thread' : 'pause thread'}</button>
+        ${['approved','rejected','resolved'].includes(t.status) ? '<button id="reopenT">reopen</button>' : '<button id="resolveT">resolve</button>'}` : ''}
+      </div></div>
+    <div class="msgs">${messages.map(m => `<div class="msg ${m.author_role}"><div class="who">${esc(m.author)}<small>${fmt(m.created_at)}</small></div><div class="body">${m.verdict ? `<div class="verdict">${m.verdict.replace('_',' ').toUpperCase()}${gated && m.author_role !== 'human' ? ' (advisory)' : ''}</div>` : ''}${render(m.body)}</div></div>`).join('') || '<div class="empty">No messages.</div>'}</div>
+    ${can ? `<div class="composer"><textarea id="body" placeholder="Write as human — everyone in the project will see it. @name to notify."></textarea>
+      <div class="actions"><button id="send" class="on">Post</button>
+        <span class="sp"></span>
+        <button class="ok" data-v="approve">Approve</button><button class="warn" data-v="request_changes">Request changes</button><button class="bad" data-v="reject">Reject</button></div></div>` : ''}`;
+  $('#thread .msgs').scrollIntoView(false);
+  if (!can) return;
+  const post = async (verdict) => {
+    const body = $('#body').value.trim() || (verdict ? verdict.replace('_', ' ') : '');
+    if (!body) return;
+    await api(`/api/threads/${id}/messages`, { body, verdict }); openThread(id);
+  };
+  $('#send').onclick = () => post(null);
+  $('#body').onkeydown = (e) => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') post(null); };
+  $('#thread').querySelectorAll('[data-v]').forEach(b => b.onclick = () => post(b.dataset.v));
+  $('#pauseT').onclick = async () => { const reason = t.paused_reason ? null : prompt('Reason (agents cannot post here until resumed):', 'Hold on.'); if (!t.paused_reason && reason == null) return; await api(`/api/threads/${id}/pause`, { reason }); openThread(id); };
+  const st = $('#resolveT') || $('#reopenT');
+  st.onclick = async () => { await api(`/api/threads/${id}/status`, { status: st.id === 'resolveT' ? 'resolved' : 'open' }); openThread(id); };
+}
+
+// ---- header actions ----
+document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => { document.querySelectorAll('.tabs button').forEach(x => x.classList.remove('on')); b.classList.add('on'); S.filter = b.dataset.f; loadThreads(); });
+$('#verify').onclick = async () => { const v = await api('/api/verify'); alert(v.ok ? `Log intact: ${v.checked} messages verified.` : `LOG TAMPERED at message #${v.broken_at}`); };
+$('#newThread').onclick = () => $('#dlgThread').showModal();
+$('#dlgThread form').onsubmit = async (e) => {
+  if (e.submitter?.value !== 'ok') return;
+  const f = new FormData(e.target);
+  const t = await api('/api/threads', { project_id: S.project, kind: f.get('kind'), title: f.get('title'), body: f.get('body'), ref: f.get('ref') || null, needs_human: f.get('kind') === 'decision', mentions: String(f.get('mentions') || '').split(',').map(s => s.trim()).filter(Boolean) });
+  e.target.reset(); await loadThreads(); openThread(t.id);
+};
+$('#newProject').onclick = () => { if (!token) return alert('Open the UI with the token link printed by `board serve` (or `board open`).'); $('#dlgProject').showModal(); };
+$('#dlgProject form').onsubmit = async (e) => { if (e.submitter?.value !== 'ok') return; const f = new FormData(e.target); const p = await api('/api/projects', { name: f.get('name'), path: f.get('path') || null }); e.target.reset(); selectProject(p.id); };
+
+// ---- live updates ----
+function connect() {
+  const es = new EventSource('/api/stream');
+  es.onopen = () => $('#live').classList.add('live');
+  es.onerror = () => { $('#live').classList.remove('live'); es.close(); setTimeout(connect, 2000); };
+  let timer = null;
+  es.addEventListener('change', (e) => {
+    const ev = JSON.parse(e.data);
+    clearTimeout(timer);
+    timer = setTimeout(async () => {
+      await loadProjects();
+      if (S.thread && (ev.threadId === S.thread || ev.type !== 'message')) {
+        const atBottom = true; await openThread(S.thread); if (atBottom) window.scrollTo(0, document.body.scrollHeight);
+      }
+    }, 150);
+  });
+}
+loadProjects().then(connect);
+</script>
+</body>
+</html>
