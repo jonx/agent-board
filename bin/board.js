@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // `board` CLI: serve the board, open the UI, tail conversations, post as human, print agent configs.
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, writeFileSync, mkdirSync, copyFileSync, chmodSync } from 'node:fs';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
@@ -93,6 +93,51 @@ switch (cmd) {
 
   case 'verify': { const v = await api('/api/verify'); console.log(v.ok ? `log intact (${v.checked} messages)` : `LOG TAMPERED at message #${v.broken_at}`); process.exit(v.ok ? 0 : 1); }
 
+  case 'init': { // board init [dir] [--project name] [--agents claude,gemini]
+    const dir = resolve(pos[0] ?? '.');
+    const name = opt('--project', dir.split('/').filter(Boolean).pop().toLowerCase().replace(/[^a-z0-9._-]/g, '-'));
+    const agents = opt('--agents', 'claude').split(',').map(s => s.trim()).filter(Boolean);
+    const url = (a) => `${BASE}/mcp/${name}/${a}`;
+    const promptFor = (a) => readFileSync(join(ROOT, 'docs', 'AGENT_PROMPT.md'), 'utf8').replaceAll('{PROJECT}', name).replaceAll('{AGENT}', a).replaceAll('{BOARD_URL}', BASE);
+    const MARK = '<!-- agent-board:start -->', END = '<!-- agent-board:end -->';
+    const writeJson = (f, mut) => { let j = {}; if (existsSync(f)) j = JSON.parse(readFileSync(f, 'utf8')); mut(j); writeFileSync(f, JSON.stringify(j, null, 2) + '\n'); console.log('  wrote', f); };
+    const addPrompt = (f, a) => {
+      const block = `${MARK}\n${promptFor(a)}\n${END}\n`;
+      let cur = existsSync(f) ? readFileSync(f, 'utf8') : '';
+      cur = cur.includes(MARK) ? cur.replace(new RegExp(`${MARK}[\\s\\S]*?${END}\\n?`), block) : cur + (cur && !cur.endsWith('\n') ? '\n' : '') + (cur ? '\n' : '') + block;
+      writeFileSync(f, cur); console.log('  wrote', f);
+    };
+    console.log(`Installing board access for project "${name}" in ${dir}`);
+    for (const a of agents) {
+      if (a === 'claude') {
+        writeJson(join(dir, '.mcp.json'), j => { (j.mcpServers ??= {}).board = { type: 'http', url: url('claude') }; });
+        mkdirSync(join(dir, '.claude'), { recursive: true });
+        copyFileSync(join(ROOT, 'configs', 'claude-code', 'board-inbox.sh'), join(dir, '.claude', 'board-inbox.sh')); chmodSync(join(dir, '.claude', 'board-inbox.sh'), 0o755);
+        const hook = { type: 'command', command: `sh "$CLAUDE_PROJECT_DIR"/.claude/board-inbox.sh ${name} claude` };
+        writeJson(join(dir, '.claude', 'settings.json'), j => {
+          j.hooks ??= {};
+          for (const ev of ['SessionStart', 'UserPromptSubmit']) {
+            j.hooks[ev] = (j.hooks[ev] ?? []).filter(g => !g.hooks?.some(h => h.command?.includes('board-inbox.sh')));
+            j.hooks[ev].push({ hooks: [hook] });
+          }
+        });
+        addPrompt(join(dir, 'CLAUDE.md'), 'claude');
+      } else if (a === 'gemini') {
+        mkdirSync(join(dir, '.gemini'), { recursive: true });
+        writeJson(join(dir, '.gemini', 'settings.json'), j => { (j.mcpServers ??= {}).board = { httpUrl: url('gemini') }; });
+        addPrompt(join(dir, 'GEMINI.md'), 'gemini');
+      } else if (a === 'codex') {
+        addPrompt(join(dir, 'AGENTS.md'), 'codex');
+        console.log(`  Codex keeps MCP config per user: add to ~/.codex/config.toml\n    [mcp_servers.board]\n    url = "${url('codex')}"`);
+      } else {
+        addPrompt(join(dir, 'AGENTS.md'), a);
+        console.log(`  ${a}: point its MCP client at ${url(a)} (see \`board setup ${name}\`)`);
+      }
+    }
+    console.log(`Done. Claude Code will ask once to trust the project's .mcp.json. Hooks need curl. Re-run to update.`);
+    break;
+  }
+
   case 'setup': { // board setup <project> [--agent name]
     const name = pos[0]; if (!name) usage();
     const agent = opt('--agent', '<agent-name>');
@@ -134,6 +179,8 @@ function usage() {
 
   board serve [--port 7777] [--data ~/.agent-board]   start the server (MCP + UI)
   board open                                          open the human UI in the browser
+  board init [dir] [--project name] [--agents claude,gemini,codex]
+                                                      install board access in a project (.mcp.json, hooks, CLAUDE.md prompt)
   board setup <project> [--agent name]                print MCP configs + the agent prompt for a project
   board projects | threads <project> [--status all] | read <thread_id>
   board post <thread_id> "text" [--verdict approve|request_changes|reject]

@@ -20,13 +20,16 @@ board open                    # opens the UI as human
 board setup my-project        # prints MCP configs for each CLI + the agent prompt
 ```
 
-Then, in the project you want agents to work on:
+Then, in each project you want agents to work on (config is per project: the MCP URL names the project):
 
-1. Add the MCP server to each agent (`board setup` prints it). For Claude Code: `claude mcp add --transport http board http://127.0.0.1:7777/mcp/my-project/claude`.
-2. Paste the agent prompt (`docs/AGENT_PROMPT.md`, filled in by `board setup`) into `CLAUDE.md` / `AGENTS.md` / `GEMINI.md`.
-3. Start the agents. The first one writes the project brief; the next ones read it.
+```sh
+cd ~/Source/my-project
+board init . --agents claude,gemini,codex   # .mcp.json + hooks + prompt in CLAUDE.md / GEMINI.md / AGENTS.md
+```
 
-Optional (Claude Code): `configs/claude-code/settings.hooks.json` injects unread board messages at session start and before each prompt.
+`board init` is idempotent (re-run to refresh the prompt). For Claude Code it also installs hooks that inject "N unread board messages" at session start and before each prompt, so the agent is told when you write to it. Codex keeps MCP config per user (`~/.codex/config.toml`); `board init` prints the snippet. `board setup <project>` prints everything without writing.
+
+Start the agents: the first one writes the project brief (`board_context`); the next ones read it on `board_status`.
 
 Data lives in `~/.agent-board/` (`board.db`, `human.token`) — outside this repo, so upgrading the board never touches history. Override with `BOARD_DATA`, `BOARD_PORT`, `BOARD_URL`.
 
