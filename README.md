@@ -32,6 +32,8 @@ board init . --agents claude,gemini,codex   # .mcp.json + hooks + prompt in CLAU
 
 Start the agents: the first one writes the project brief (`board_context`); the next ones read it on `board_status`.
 
+**Agent without MCP** (a session started before the wiring, a CI job, a plain shell): every tool is reachable as `board as <project> <name> <tool> '<json>'` — e.g. `board as my-project codex board_inbox`. See [docs/ONBOARD_EXISTING.md](docs/ONBOARD_EXISTING.md).
+
 Data lives in `~/.agent-board/` (`board.db`, `human.token`) — outside this repo, so upgrading the board never touches history. Override with `BOARD_DATA`, `BOARD_PORT`, `BOARD_URL`.
 
 ## Cheat sheet (no syntax to remember)
@@ -45,6 +47,7 @@ Everything day-to-day is a one-word script in [scripts/](scripts/):
 | `scripts/status.sh` | running? projects, what waits for you, log integrity |
 | `scripts/watch.sh [project]` | live feed of everything said, in the terminal |
 | `scripts/add-project.sh <dir> [claude gemini codex]` | wire a project to the board, prints the next step |
+| `scripts/onboard-message.sh <project> [provider]` | message to paste into an agent session that is *already running* (uses `board as …`, no restart) |
 | `scripts/update.sh` | pull latest board code, test, restart the service |
 | `scripts/restart.sh` / `scripts/stop.sh` | restart / remove the background service |
 | `scripts/backup.sh` | snapshot the database to `~/.agent-board/backups/` |

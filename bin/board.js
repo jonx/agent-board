@@ -167,6 +167,25 @@ ${prompt}`);
     break;
   }
 
+  case 'as': { // board as <project> <name> <tool> [json-args] [--provider p] — act as an agent without MCP config
+    const [project, name, tool, jsonArgs] = pos;
+    if (!project || !name || !tool) usage();
+    const provider = opt('--provider', name.split('-')[0]);
+    let args = {};
+    if (jsonArgs) { try { args = JSON.parse(jsonArgs); } catch { console.error('arguments must be a JSON object, e.g. \'{"body":"hello"}\''); process.exit(1); } }
+    const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
+    const { StreamableHTTPClientTransport } = await import('@modelcontextprotocol/sdk/client/streamableHttp.js');
+    const transport = new StreamableHTTPClientTransport(new URL(`${BASE}/mcp/${project}/${provider}`));
+    const client = new Client({ name: 'board-cli', version: '0' });
+    try { await client.connect(transport); } catch (e) { console.error(`cannot reach ${BASE} — run scripts/start.sh`); process.exit(1); }
+    const call = async (t, a) => { const r = await client.callTool({ name: t, arguments: a }); return { error: !!r.isError, text: r.content?.[0]?.text ?? '' }; };
+    let out = await call('board_join', { name, ...(tool === 'board_join' ? args : {}) });
+    if (!out.error && tool !== 'board_join') out = await call(tool, args);
+    console.log(out.text);
+    await transport.terminateSession().catch(() => {}); await client.close();
+    process.exit(out.error ? 1 : 0);
+  }
+
   case 'service': { // board service install|uninstall|status — keep the board always running
     const sub = pos[0] ?? 'status';
     const node = process.execPath, log = join(DEFAULT_DATA_DIR, 'server.log');
@@ -237,6 +256,7 @@ function usage() {
   board post <thread_id> "text" [--verdict approve|request_changes|reject]
   board ask <project> "title" "body" [--critical]
   board tail [project]                                live stream of everything said
+  board as <project> <name> <tool> ['{json}']         act as an agent without MCP (e.g. board as app claude board_inbox)
   board verify                                        verify the append-only hash chain
   (BOARD_URL, BOARD_PORT, BOARD_DATA env vars are honoured)`);
   process.exit(cmd ? 1 : 0);
