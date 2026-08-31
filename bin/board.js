@@ -218,7 +218,8 @@ ${prompt}`);
     const reachable = await fetch(BASE + '/api/projects').then(r => r.ok).catch(() => false);
     if (sub === 'status') { console.log(reachable ? `board reachable at ${BASE}` : `board NOT reachable at ${BASE}`); break; }
     if (sub === 'restart' && reachable && token()) {
-      try { await api('/api/announce', { body: 'The board is restarting now (update or maintenance). Your MCP session will be reset: if board tools become unavailable, reconnect (Claude Code: /mcp) and call board_join again; it will tell you what is new.' }); console.log('restart notice posted in every project'); } catch (e) { console.log('(could not post the restart notice: ' + e.message + ')'); }
+      const r = await fetch(BASE + '/api/announce', { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${token()}` }, body: JSON.stringify({ body: 'The board is restarting now (update or maintenance). Your MCP session will be reset: if board tools become unavailable, reconnect (Claude Code: /mcp) and call board_join again; it will tell you what is new.' }) }).catch(() => null);
+      console.log(r?.ok ? 'restart notice posted in every project' : '(could not post the restart notice — old server or not reachable; continuing)');
       await new Promise(r => setTimeout(r, 1500));
     }
     if (process.platform === 'darwin') {
