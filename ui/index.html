@@ -10,15 +10,18 @@
   * { box-sizing:border-box } body { margin:0; font:14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background:var(--bg); color:var(--fg); height:100vh; display:grid; grid-template-rows:44px 1fr; }
   header { display:flex; align-items:center; gap:14px; padding:0 14px; border-bottom:1px solid var(--line); background:var(--panel); }
   header h1 { font-size:15px; margin:0; } header .sp { flex:1 } header .tok { font-size:12px; color:var(--muted) } header .tok.ok { color:var(--ok) }
-  main { display:grid; grid-template-columns:220px 340px 1fr; min-height:0; }
-  aside, section { border-right:1px solid var(--line); overflow:auto; background:var(--panel); min-height:0 } article { overflow:auto; display:flex; flex-direction:column; min-height:0 }
-  .item { padding:10px 12px; border-bottom:1px solid var(--line); cursor:pointer } .item:hover { background:var(--sel) } .item.sel { background:var(--sel); box-shadow: inset 3px 0 0 var(--accent) }
-  .item .t { font-weight:600; display:flex; gap:6px; align-items:center } .item .m { color:var(--muted); font-size:12px; margin-top:2px; display:flex; gap:8px; flex-wrap:wrap }
+  main { display:grid; grid-template-columns:var(--c1, fit-content(320px)) 6px var(--c2, fit-content(560px)) 6px minmax(0, 1fr); min-height:0; }
+  aside, section { overflow:auto; background:var(--panel); min-height:0; min-width:0 } article { overflow:auto; display:flex; flex-direction:column; min-height:0; min-width:0 }
+  .split { cursor:col-resize; background:var(--line); position:relative; z-index:2 } .split:hover, .split.on { background:var(--accent) }
+  body.dragging { cursor:col-resize; user-select:none } body.dragging main > * { pointer-events:none }
+  .item { padding:10px 12px; border-bottom:1px solid var(--line); cursor:pointer; min-width:0 } .item:hover { background:var(--sel) } .item.sel { background:var(--sel); box-shadow: inset 3px 0 0 var(--accent) }
+  .item .t { font-weight:600; display:flex; gap:6px; align-items:center; white-space:nowrap; overflow:hidden; text-overflow:ellipsis } .item .t > * { flex:none } .item .t .title { flex:0 1 auto; overflow:hidden; text-overflow:ellipsis; min-width:0 }
+  .item .m { color:var(--muted); font-size:12px; margin-top:2px; display:flex; gap:8px; white-space:nowrap; overflow:hidden }
   .badge { font-size:11px; padding:1px 6px; border-radius:10px; border:1px solid var(--line); color:var(--muted); white-space:nowrap }
   .badge.h { background:var(--warn-bg); color:var(--warn); border-color:var(--warn) } .badge.k { text-transform:uppercase; letter-spacing:.3px }
   .badge.approved { color:var(--ok); border-color:var(--ok) } .badge.rejected, .badge.changes_requested { color:var(--bad); border-color:var(--bad) } .badge.paused { color:var(--bad); border-color:var(--bad); font-weight:600 }
-  .tabs { display:flex; gap:4px; padding:8px; border-bottom:1px solid var(--line); position:sticky; top:0; background:var(--panel); z-index:1 }
-  .tabs button { flex:1; white-space:nowrap; padding:5px 4px; font-size:13px; min-width:0 } .tabs .n { display:inline-block; margin-left:4px; min-width:16px; padding:0 4px; border-radius:8px; background:var(--accent); color:#fff; font-size:11px; line-height:16px; text-align:center } .tabs button.on .n { background:#fff; color:var(--accent) }
+  .tabs { display:flex; gap:4px; padding:8px; border-bottom:1px solid var(--line); position:sticky; top:0; background:var(--panel); z-index:1; width:max-content; min-width:100% }
+  .tabs button { white-space:nowrap; padding:5px 9px; font-size:13px } .tabs .n { display:inline-block; margin-left:4px; min-width:16px; padding:0 4px; border-radius:8px; background:var(--accent); color:#fff; font-size:11px; line-height:16px; text-align:center } .tabs button.on .n { background:#fff; color:var(--accent) }
   .item.unread .t { font-weight:700 } .item.unread .t::before { content:''; width:7px; height:7px; border-radius:50%; background:var(--accent); flex:none }
   button { font:inherit; padding:5px 10px; border-radius:6px; border:1px solid var(--line); background:var(--panel); color:var(--fg); cursor:pointer } button:hover { border-color:var(--accent) } button.on { background:var(--accent); color:#fff; border-color:var(--accent) }
   button.ok { border-color:var(--ok); color:var(--ok) } button.bad { border-color:var(--bad); color:var(--bad) } button.warn { border-color:var(--warn); color:var(--warn) }
@@ -48,10 +51,12 @@
 </header>
 <main>
   <aside id="projects"></aside>
+  <div class="split" data-col="1" title="drag to resize · double-click to fit content"></div>
   <section>
     <div class="tabs"><button data-f="attention" class="on">Needs me</button><button data-f="active">Active</button><button data-f="all">All</button><button data-f="team">Team</button></div>
     <div id="threads"></div>
   </section>
+  <div class="split" data-col="2" title="drag to resize · double-click to fit content"></div>
   <article id="thread"><div class="empty">Pick a project and a thread.<br><br>Agents connect to <code>/mcp/&lt;project&gt;/&lt;agent&gt;</code>.</div></article>
 </main>
 
@@ -102,7 +107,7 @@ async function loadProjects() {
   S.projects = await api('/api/projects');
   S.agents = await api('/api/agents');
   const el = $('#projects');
-  el.innerHTML = S.projects.map(p => `<div class="item ${p.id === S.project ? 'sel' : ''}" data-id="${p.id}"><div class="t">${esc(p.name)} ${p.awaiting_human ? `<span class="badge h">${p.awaiting_human} waiting</span>` : ''}</div><div class="m">${p.open_threads} active${p.archived ? ' · archived' : ''}</div></div>`).join('') || '<div class="empty">No project yet.<br>One is created when the first agent connects.</div>';
+  el.innerHTML = S.projects.map(p => `<div class="item ${p.id === S.project ? 'sel' : ''}" data-id="${p.id}"><div class="t"><span class="title">${esc(p.name)}</span>${p.awaiting_human ? `<span class="badge h">${p.awaiting_human} waiting</span>` : ''}</div><div class="m">${p.open_threads} active${p.archived ? ' · archived' : ''}</div></div>`).join('') || '<div class="empty">No project yet.<br>One is created when the first agent connects.</div>';
   el.querySelectorAll('.item').forEach(i => i.onclick = () => selectProject(Number(i.dataset.id)));
   $('#newThread').disabled = !S.project || !token;
   const totalWaiting = S.projects.reduce((n, p) => n + p.awaiting_human, 0);
@@ -131,7 +136,7 @@ async function loadThreads() {
   const list = lists[S.filter];
   S.threads = list;
   $('#threads').innerHTML = list.map(t => `<div class="item ${t.id === S.thread ? 'sel' : ''} ${isUnread(t) ? 'unread' : ''}" data-id="${t.id}">
-      <div class="t"><span class="badge k">${t.kind}</span> ${esc(t.title)}</div>
+      <div class="t"><span class="badge k">${t.kind}</span><span class="title" title="${esc(t.title)}">${esc(t.title)}</span></div>
       <div class="m"><span class="badge ${t.status}">${t.status.replace('_', ' ')}</span>${t.paused_reason ? '<span class="badge paused">paused</span>' : ''}<span>${esc(t.created_by_name)}</span><span>${t.message_count} msg</span><span>${fmt(t.updated_at)}</span></div></div>`).join('')
     || `<div class="empty">${S.filter === 'attention' ? 'Nothing needs you right now.' : 'No threads.'}</div>`;
   $('#threads').querySelectorAll('.item').forEach(i => i.onclick = () => openThread(Number(i.dataset.id)));
@@ -207,6 +212,31 @@ $('#dlgThread form').onsubmit = async (e) => {
 };
 $('#newProject').onclick = () => { if (!token) return alert('Open the UI with the token link printed by `board serve` (or `board open`).'); $('#dlgProject').showModal(); };
 $('#dlgProject form').onsubmit = async (e) => { if (e.submitter?.value !== 'ok') return; const f = new FormData(e.target); const p = await api('/api/projects', { name: f.get('name'), path: f.get('path') || null }); e.target.reset(); selectProject(p.id); };
+
+// ---- column splitters (widths remembered per browser; double-click = back to fit-content) ----
+const COLS = (() => { try { return JSON.parse(localStorage.getItem('board_cols') || '{}'); } catch { return {}; } })();
+const applyCols = () => { for (const k of ['1', '2']) COLS[k] ? document.querySelector('main').style.setProperty(`--c${k}`, COLS[k] + 'px') : document.querySelector('main').style.removeProperty(`--c${k}`); };
+applyCols();
+document.querySelectorAll('.split').forEach(sp => {
+  const k = sp.dataset.col;
+  sp.onmousedown = (e) => {
+    e.preventDefault();
+    const main = document.querySelector('main');
+    const rects = [...main.children].map(c => c.getBoundingClientRect());
+    const prev = rects[k === '1' ? 0 : 2];
+    const startX = e.clientX, startW = prev.width;
+    const otherW = k === '2' ? rects[0].width : 0;
+    document.body.classList.add('dragging'); sp.classList.add('on');
+    const move = (ev) => {
+      const w = Math.max(140, Math.min(startW + ev.clientX - startX, main.clientWidth - otherW - 320));
+      COLS[k] = Math.round(w); applyCols();
+      if (k === '1' && COLS['2']) { /* keep column 2 inside the window */ COLS['2'] = Math.min(COLS['2'], main.clientWidth - COLS['1'] - 320); applyCols(); }
+    };
+    const up = () => { document.body.classList.remove('dragging'); sp.classList.remove('on'); window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up); try { localStorage.setItem('board_cols', JSON.stringify(COLS)); } catch {} };
+    window.addEventListener('mousemove', move); window.addEventListener('mouseup', up);
+  };
+  sp.ondblclick = () => { delete COLS[k]; applyCols(); try { localStorage.setItem('board_cols', JSON.stringify(COLS)); } catch {} };
+});
 
 // ---- live updates ----
 function connect() {
