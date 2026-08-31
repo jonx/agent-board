@@ -106,6 +106,7 @@ export function createHttpServer({ store, humanToken, uiFile, registry = new Ses
       if (p === '/api/projects') return json(res, 200, store.listProjects());
       if (p === '/api/agents') return json(res, 200, store.listAgents());
       if (p === '/api/verify') return json(res, 200, store.verifyChain());
+      if (p === '/api/version') return json(res, 200, { version: store.getMeta('board_version') });
       if (p === '/api/events') return json(res, 200, store.listEvents(q.get('project_id') ? id(q.get('project_id')) : null, Number(q.get('limit') ?? 100)));
       if (p === '/api/inbox') { // peek for agent-side hooks: /api/inbox?project=x&agent=y
         const a = store.getAgent(q.get('agent') ?? ''), pr = store.getProject(q.get('project') ?? '');
@@ -134,6 +135,7 @@ export function createHttpServer({ store, humanToken, uiFile, registry = new Ses
     if (req.method !== 'POST') return json(res, 405, { error: 'method' });
     const actor = requireHuman(req);
     if (p === '/api/projects') return json(res, 200, store.ensureProject(body.name, body.path ?? null, actor));
+    if (p === '/api/announce') { if (!body.body?.trim()) throw new BoardError('bad_input', 'body required'); return json(res, 200, store.announceAll(body.body)); }
     if (seg[0] === 'projects' && seg[2] === 'archive') { store.archiveProject(actor, id(seg[1]), body.archived !== false); return json(res, 200, { ok: true }); }
     if (p === '/api/threads') {
       return json(res, 200, store.createThread(actor, { projectId: id(body.project_id), kind: body.kind ?? 'question', title: body.title, body: body.body, ref: body.ref ?? null, needsHuman: !!body.needs_human, mentions: body.mentions ?? [] }));

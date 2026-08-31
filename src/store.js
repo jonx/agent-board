@@ -4,7 +4,7 @@
 
 import { EventEmitter } from 'node:events';
 import { createHash } from 'node:crypto';
-import { THREAD_KINDS, THREAD_STATUSES, TASK_STATUSES, VERDICTS } from './db.js';
+import { THREAD_KINDS, THREAD_STATUSES, TASK_STATUSES, VERDICTS, SYSTEM_AGENT } from './db.js';
 
 export class BoardError extends Error {
   constructor(code, message, extra = {}) { super(message); this.code = code; this.extra = extra; }
@@ -45,6 +45,7 @@ export class Store {
     if (!/^[a-z0-9][a-z0-9._-]{0,39}$/.test(name)) throw new BoardError('bad_agent', `invalid agent name "${name}" (use a-z 0-9 . _ -)`);
     const existing = this.getAgent(name);
     if (existing?.role === 'human') throw new BoardError('forbidden', `"${name}" is the human account; agents cannot act as the human`);
+    if (existing?.provider === 'system' || name === SYSTEM_AGENT) throw new BoardError('forbidden', `"${name}" is reserved for the board's own system messages`);
     if (existing) {
       this.db.prepare(`UPDATE agents SET last_seen_at = ?, provider = COALESCE(?, provider) WHERE id = ?`).run(now(), provider, existing.id);
       return { ...existing, last_seen_at: now() };
@@ -383,6 +384,56 @@ export class Store {
     }
     this.event('claim.released', { agentId: actor.id, projectId, data: { paths: paths ?? 'all' } });
     this.emit('claim', { projectId });
+  }
+
+  // ---------- system messages (board updates) ----------
+  systemAgent() { return this.getAgent(SYSTEM_AGENT); }
+  getMeta(key) { return this.db.prepare(`SELECT value FROM meta WHERE key = ?`).get(key)?.value ?? null; }
+  setMeta(key, value) { this.db.prepare(`INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`).run(key, String(value)); }
+
+  /** Post a system message in a project's "Board updates" thread (created on demand). */
+  systemPost(projectId, body) {
+    const sys = this.systemAgent();
+    let t = this.db.prepare(`SELECT id FROM threads WHERE project_id = ? AND kind = 'status' AND created_by = ? AND title = 'Board updates'`).get(projectId, sys.id);
+    const now_ = now();
+    this.db.exec('BEGIN');
+    let id;
+    try {
+      if (!t) {
+        const r = this.db.prepare(`INSERT INTO threads (project_id, kind, title, created_by, needs_human, status, created_at, updated_at) VALUES (?, 'status', 'Board updates', ?, 0, 'open', ?, ?)`).run(projectId, sys.id, now_, now_);
+        t = { id: Number(r.lastInsertRowid) };
+      }
+      id = this.insertMessage({ threadId: t.id, projectId, author: sys, body, kind: 'system' });
+      this.db.exec('COMMIT');
+    } catch (e) { this.db.exec('ROLLBACK'); throw e; }
+    this.emit('message', { projectId, threadId: t.id, messageId: id, authorId: sys.id, authorRole: 'agent' });
+    return { thread_id: t.id, id };
+  }
+  /** Same message in every non-archived project. */
+  announceAll(body) {
+    const posted = [];
+    for (const p of this.listProjects()) if (!p.archived) posted.push({ project: p.name, ...this.systemPost(p.id, body) });
+    this.event('board.announce', { data: { body: body.slice(0, 200), projects: posted.length } });
+    return posted;
+  }
+  /** Called at startup: if the board version changed since last run, tell every project what is new. */
+  recordVersion(version, changelogSince) {
+    const prev = this.getMeta('board_version');
+    if (prev === version) return { changed: false, version };
+    this.setMeta('board_version', version);
+    if (prev !== null) {
+      const notes = changelogSince(prev) || '(no changelog entry)';
+      this.announceAll(`Board updated: ${prev} → ${version}. Your MCP session was reset by the restart: if board tools are missing or stale, reconnect (Claude Code: /mcp) and call board_join again — its reply carries a "whats_new" field.\n\nWhat changed:\n${notes}`);
+    }
+    return { changed: true, version, previous: prev };
+  }
+  /** What an agent has not seen yet; marks the version as seen. */
+  whatsNewFor(agent, version, changelogSince) {
+    const seen = this.getAgent(agent.id)?.last_board_version ?? null;
+    if (seen === version) return null;
+    this.db.prepare(`UPDATE agents SET last_board_version = ? WHERE id = ?`).run(version, agent.id);
+    if (seen === null) return null; // first visit ever: nothing to diff against
+    return { since: seen, now: version, notes: changelogSince(seen) || '(no changelog entry)' };
   }
 
   // ---------- audit ----------

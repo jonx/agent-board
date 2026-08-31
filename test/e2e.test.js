@@ -109,3 +109,28 @@ test('two providers coordinate through the board with the human watching', async
 
   await claude.c.close(); await codex.c.close(); await other.c.close();
 });
+
+test('update workflow: version change is announced and join reports whats_new', async () => {
+  const notes = (v) => `## 9.9.9\n- pretend change (since ${v})`;
+  // Simulate: the running version was 0.0.1, the server restarts as 9.9.9.
+  store.setMeta('board_version', '0.0.1');
+  const r = store.recordVersion('9.9.9', notes);
+  assert.equal(r.previous, '0.0.1');
+  const demo = store.getProject('demo');
+  const updates = store.listThreads(demo.id, { status: 'all', kind: 'status' }).find(t => t.title === 'Board updates');
+  assert.ok(updates, 'Board updates thread created');
+  const last = store.threadMessages(updates.id).at(-1);
+  assert.equal(last.author, 'board'); assert.match(last.body, /0\.0\.1 → 9\.9\.9/); assert.match(last.body, /pretend change/);
+  // An agent that had seen an older version gets whats_new; the next join does not repeat it.
+  const a = store.getAgent('claude');
+  store.db.prepare(`UPDATE agents SET last_board_version = '0.0.1' WHERE id = ?`).run(a.id);
+  assert.equal(store.whatsNewFor(a, '9.9.9', notes)?.since, '0.0.1');
+  assert.equal(store.whatsNewFor(a, '9.9.9', notes), null);
+  // The human can announce; agents cannot take the "board" name.
+  const ann = await humanApi('/api/announce', { body: 'maintenance in 5 min' });
+  assert.equal(ann.status, 200); assert.ok(ann.data.length >= 2);
+  await assert.rejects(agent('demo', 'board', 'claude'), /reserved/);
+  // The announce endpoint is human-only.
+  const noTok = await fetch(`${base}/api/announce`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ body: 'x' }) });
+  assert.equal(noTok.status, 403);
+});

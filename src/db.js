@@ -102,6 +102,12 @@ CREATE TABLE IF NOT EXISTS claims (
   released_at TEXT
 );
 
+-- Key/value store for server state (e.g. last board version seen).
+CREATE TABLE IF NOT EXISTS meta (
+  key   TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
+
 -- Append-only audit of every non-message action (pause, approve, claim, join, ...).
 CREATE TABLE IF NOT EXISTS events (
   id          INTEGER PRIMARY KEY,
@@ -163,8 +169,24 @@ export function openDatabase(file = ':memory:') {
   if (file !== ':memory:') mkdirSync(dirname(file), { recursive: true });
   const db = new DatabaseSync(file);
   db.exec(SCHEMA);
+  migrate(db);
   ensureHuman(db);
+  ensureSystemAgent(db);
   return db;
+}
+
+// Additive migrations only (columns can be added, never removed or repurposed).
+function migrate(db) {
+  const cols = db.prepare(`PRAGMA table_info(agents)`).all().map(c => c.name);
+  if (!cols.includes('last_board_version')) db.exec(`ALTER TABLE agents ADD COLUMN last_board_version TEXT`);
+}
+
+/** The reserved "board" account authors system messages (update notices). No session can join as it. */
+export const SYSTEM_AGENT = 'board';
+function ensureSystemAgent(db) {
+  if (!db.prepare(`SELECT id FROM agents WHERE name = ?`).get(SYSTEM_AGENT)) {
+    db.prepare(`INSERT INTO agents (name, provider, role, created_at) VALUES (?, 'system', 'agent', ?)`).run(SYSTEM_AGENT, new Date().toISOString());
+  }
 }
 
 function ensureHuman(db) {

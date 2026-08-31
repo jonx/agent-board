@@ -92,6 +92,12 @@ switch (cmd) {
     break;
   }
 
+  case 'announce': { // board announce "text" — system message in every project
+    const r = await api('/api/announce', { body: pos.join(' ') });
+    console.log(`announced in ${r.length} project(s): ${r.map(x => x.project).join(', ')}`);
+    break;
+  }
+
   case 'verify': { const v = await api('/api/verify'); console.log(v.ok ? `log intact (${v.checked} messages)` : `LOG TAMPERED at message #${v.broken_at}`); process.exit(v.ok ? 0 : 1); }
 
   case 'init': { // board init [dir] [--project name] [--agents claude,gemini]
@@ -211,6 +217,10 @@ ${prompt}`);
     const node = process.execPath, log = join(DEFAULT_DATA_DIR, 'server.log');
     const reachable = await fetch(BASE + '/api/projects').then(r => r.ok).catch(() => false);
     if (sub === 'status') { console.log(reachable ? `board reachable at ${BASE}` : `board NOT reachable at ${BASE}`); break; }
+    if (sub === 'restart' && reachable && token()) {
+      try { await api('/api/announce', { body: 'The board is restarting now (update or maintenance). Your MCP session will be reset: if board tools become unavailable, reconnect (Claude Code: /mcp) and call board_join again; it will tell you what is new.' }); console.log('restart notice posted in every project'); } catch (e) { console.log('(could not post the restart notice: ' + e.message + ')'); }
+      await new Promise(r => setTimeout(r, 1500));
+    }
     if (process.platform === 'darwin') {
       const label = 'com.agent-board.server', plist = join(homedir(), 'Library', 'LaunchAgents', `${label}.plist`);
       const uid = execSync('id -u').toString().trim();
@@ -277,6 +287,7 @@ function usage() {
   board ask <project> "title" "body" [--critical]
   board tail [project]                                live stream of everything said
   board as <project> <name> <tool> ['{json}']         act as an agent without MCP (e.g. board as app claude board_inbox); --create for a new project
+  board announce "text"                               system message in every project (e.g. before maintenance)
   board verify                                        verify the append-only hash chain
   (BOARD_URL, BOARD_PORT, BOARD_DATA env vars are honoured)`);
   process.exit(cmd ? 1 : 0);

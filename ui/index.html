@@ -25,7 +25,8 @@
   .thead { padding:12px 16px; border-bottom:1px solid var(--line); background:var(--panel); position:sticky; top:0; z-index:1 } .thead h2 { margin:0 0 4px; font-size:16px } .thead .row { display:flex; gap:6px; align-items:center; flex-wrap:wrap; font-size:12px; color:var(--muted) }
   .msgs { padding:12px 16px; flex:1 } .msg { display:grid; grid-template-columns:110px 1fr; gap:10px; padding:10px 0; border-bottom:1px solid var(--line) }
   .msg .who { font-weight:600; font-size:13px } .msg .who small { display:block; font-weight:400; color:var(--muted); font-size:11px } .msg .body { white-space:pre-wrap; word-break:break-word }
-  .msg.human { background:var(--human-bg); margin:0 -16px; padding:10px 16px } .msg.human .who { color:var(--human) } .msg .verdict { font-weight:700; margin-bottom:4px } .mention { color:var(--accent); font-weight:600 }
+  .msg.human { background:var(--human-bg); margin:0 -16px; padding:10px 16px } .msg.human .who { color:var(--human) }
+  .msg.system { background:var(--warn-bg); margin:0 -16px; padding:10px 16px; border-left:3px solid var(--warn) } .msg.system .who { color:var(--warn) } .msg .verdict { font-weight:700; margin-bottom:4px } .mention { color:var(--accent); font-weight:600 }
   .composer { border-top:1px solid var(--line); padding:10px 16px; background:var(--panel); position:sticky; bottom:0 } textarea { width:100%; min-height:70px; font:inherit; padding:8px; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--fg); resize:vertical }
   .actions { display:flex; gap:6px; margin-top:6px; flex-wrap:wrap; align-items:center } .actions .sp { flex:1 }
   .empty { padding:30px; color:var(--muted); text-align:center }
@@ -173,7 +174,7 @@ async function openThread(id) {
         ${can ? `<button class="warn" id="pauseT">${t.paused_reason ? 'resume thread' : 'pause thread'}</button>
         ${['approved','rejected','resolved'].includes(t.status) ? '<button id="reopenT">reopen</button>' : '<button id="resolveT">resolve</button>'}` : ''}
       </div></div>
-    <div class="msgs">${messages.map(m => `<div class="msg ${m.author_role}"><div class="who">${esc(m.author)}<small>${fmt(m.created_at)}</small></div><div class="body">${m.verdict ? `<div class="verdict">${m.verdict.replace('_',' ').toUpperCase()}${gated && m.author_role !== 'human' ? ' (advisory)' : ''}</div>` : ''}${render(m.body)}</div></div>`).join('') || '<div class="empty">No messages.</div>'}</div>
+    <div class="msgs">${messages.map(m => `<div class="msg ${m.kind === 'system' ? 'system' : m.author_role}"><div class="who">${esc(m.author)}<small>${fmt(m.created_at)}</small></div><div class="body">${m.verdict ? `<div class="verdict">${m.verdict.replace('_',' ').toUpperCase()}${gated && m.author_role !== 'human' ? ' (advisory)' : ''}</div>` : ''}${render(m.body)}</div></div>`).join('') || '<div class="empty">No messages.</div>'}</div>
     ${can ? `<div class="composer"><textarea id="body" placeholder="Write as human — everyone in the project will see it. @name to notify."></textarea>
       <div class="actions"><button id="send" class="on">Post</button>
         <span class="sp"></span>

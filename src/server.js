@@ -9,6 +9,7 @@ import { openDatabase } from './db.js';
 import { Store } from './store.js';
 import { runInvariantChecks } from './invariants.js';
 import { createHttpServer } from './http.js';
+import { VERSION, changelogSince } from './changelog.js';
 
 export const DEFAULT_DATA_DIR = process.env.BOARD_DATA ?? join(homedir(), '.agent-board');
 export const DEFAULT_PORT = Number(process.env.BOARD_PORT ?? 7777);
@@ -29,6 +30,8 @@ export function startServer({ port = DEFAULT_PORT, host = '127.0.0.1', dataDir =
   const db = openDatabase(join(dataDir, 'board.db'));
   const store = new Store(db);
   const humanToken = loadHumanToken(dataDir);
+  const v = store.recordVersion(VERSION, changelogSince);
+  if (v.changed && v.previous && !quiet) console.log(`board updated ${v.previous} → ${v.version}: update notice posted in every project`);
   const uiFile = join(dirname(fileURLToPath(import.meta.url)), '..', 'ui', 'index.html');
   const server = createHttpServer({ store, humanToken, uiFile });
   server.on('error', (e) => {
@@ -39,7 +42,7 @@ export function startServer({ port = DEFAULT_PORT, host = '127.0.0.1', dataDir =
   return new Promise(resolve => server.listen(port, host, () => {
     const base = `http://${host}:${server.address().port}`;
     if (!quiet) {
-      console.log(`agent-board ready  (invariants OK, db: ${join(dataDir, 'board.db')})`);
+      console.log(`agent-board ${VERSION} ready  (invariants OK, db: ${join(dataDir, 'board.db')})`);
       console.log(`  human UI : ${base}/#token=${humanToken}`);
       console.log(`  agents   : ${base}/mcp/<project>/<agent-name>`);
     }

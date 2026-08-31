@@ -48,6 +48,12 @@ export function runInvariantChecks() {
   mustThrow('human no pause (sql)', () => db.prepare(`UPDATE agents SET paused_reason = 'x' WHERE id = ?`).run(human.id), /cannot be paused/);
   mustThrow('second human', () => db.prepare(`INSERT INTO agents (name, role, created_at) VALUES ('h2','human','now')`).run(), /only one human/);
   mustThrow('agent cannot be named human', () => s.ensureAgent('human'), /human account/);
+  mustThrow('agent cannot be named board (system)', () => s.ensureAgent('board'), /reserved/);
+  check('system messages are readable, append-only like any other', () => {
+    const r = s.systemPost(p.id, 'update notice');
+    const msgs = s.threadMessages(r.thread_id);
+    if (msgs[msgs.length - 1].kind !== 'system' || msgs[msgs.length - 1].author !== 'board') throw new Error('bad system post');
+  });
   // I5. Human-gated decisions.
   check('decision waits for human', () => { if (dec.status !== 'awaiting_human' || !dec.needs_human) throw new Error(dec.status); });
   mustThrow('needs_human sticky', () => db.prepare(`UPDATE threads SET needs_human = 0 WHERE id = ?`).run(dec.id), /keeps requiring/);

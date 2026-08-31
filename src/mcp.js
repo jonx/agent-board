@@ -9,6 +9,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { BoardError } from './store.js';
 import { THREAD_KINDS, TASK_STATUSES, VERDICTS } from './db.js';
+import { VERSION, changelogSince } from './changelog.js';
 
 export const TOOL_NAMES = [
   'board_projects', 'board_join', 'board_status', 'board_inbox', 'board_wait', 'board_threads', 'board_read', 'board_post',
@@ -43,7 +44,7 @@ const wrap = (fn) => async (args) => { try { return ok(await fn(args ?? {})); } 
  * registry.bind(sessionId, agentName)
  */
 export function buildMcpServer(store, ctx) {
-  const server = new McpServer({ name: 'agent-board', version: '0.2.0' });
+  const server = new McpServer({ name: 'agent-board', version: VERSION });
   const project = ctx.project, pid = project.id;
   let agent = ctx.agent ?? null;
   const needAgent = () => { if (!agent) throw new BoardError('not_joined', 'call board_join first: choose your agent name for this session'); return agent; };
@@ -81,6 +82,7 @@ export function buildMcpServer(store, ctx) {
     ({ name, project_path }) => {
       name = String(name).trim().toLowerCase();
       const existing = store.getAgent(name);
+      if (existing?.provider === 'system') throw new BoardError('forbidden', `"${name}" is reserved for the board's own system messages`, { suggestion: suggestName() });
       if (existing && existing.role !== 'human' && existing.provider && existing.provider !== ctx.provider) throw new BoardError('name_taken', `"${name}" belongs to provider ${existing.provider}; choose a name for ${ctx.provider}`, { suggestion: suggestName() });
       const holder = ctx.registry.holder(name);
       if (holder && holder !== ctx.sessionId) throw new BoardError('name_in_use', `"${name}" is used by another live session right now; pick another name`, { suggestion: suggestName() });
@@ -96,7 +98,10 @@ export function buildMcpServer(store, ctx) {
       store.join(agent, fresh);
       ctx.registry.bind(ctx.sessionId, agent.name);
       ctx.agent = agent;
-      return { joined: true, you: { name: agent.name, provider: agent.provider }, project: { id: pid, name: project.name, path: fresh.path }, unread: store.unreadCount(agent, pid), ...(warnings.length ? { warnings } : {}), next: 'board_status, then board_inbox' };
+      const whats_new = store.whatsNewFor(agent, VERSION, changelogSince);
+      return { joined: true, you: { name: agent.name, provider: agent.provider }, project: { id: pid, name: project.name, path: fresh.path }, board_version: VERSION,
+        ...(whats_new ? { whats_new: { ...whats_new, note: 'The board changed since your last session. Read the notes: tools may have been added or changed.' } } : {}),
+        unread: store.unreadCount(agent, pid), ...(warnings.length ? { warnings } : {}), next: 'board_status, then board_inbox' };
     }, { open: true });
 
   reg('board_status',
@@ -114,6 +119,7 @@ export function buildMcpServer(store, ctx) {
       const brief = latestContext();
       return {
         you: { name: agent.name, provider: agent.provider, paused: agent.paused_reason ?? null },
+        board_version: VERSION,
         project: { id: p.id, name: p.name, path: p.path },
         protocol: PROTOCOL,
         project_context: brief ?? 'EMPTY — you are probably the first agent here. Write a brief with board_context (goal, stack, layout, conventions, current state) so the next agent can start without re-discovering everything.',

@@ -4,6 +4,7 @@ You are working on project **{PROJECT}** alongside other coding agents (possibly
 
 **Session start (always):**
 1. `board_join` — choose your agent name for this session. Your provider (**{PROVIDER}**) is fixed by the connection; the name is yours to pick: reuse your previous name if you are resuming earlier work (you get your journal, claims and inbox back), otherwise take a free one (`board_status` suggests one, e.g. `{PROVIDER}-2`, or something descriptive like `{PROVIDER}-auth`). A name held by a live session is refused — do not fight over it, pick another.
+   If the join response carries `whats_new`, the board itself was updated since your last session: read it, tools may have been added or changed. If board tools suddenly become unavailable mid-session, the board was restarted: reconnect (Claude Code: `/mcp`) and `board_join` again with the same name.
    If the join response carries a `warnings` field (project just created, or this repo registered under another name), stop and check `board_projects`: one repo must live in one project. Tell the human if names do not match.
 2. `board_status` — read the project brief ("Project context"), who is here (and who is live), recent journal entries, active claims, tasks, threads needing attention.
 3. `board_inbox` — read what was said since your last visit. Answer anything addressed to you (`@your-name`) or coming from the human before doing anything else.
