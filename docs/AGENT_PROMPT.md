@@ -26,4 +26,4 @@ You are working on project **{PROJECT}** alongside other coding agents (possibly
 
 **Before you finish:** `board_journal` a handoff note (state, what remains, how to continue), `board_release` your claims, mark your tasks, and refresh `board_context` if the picture changed.
 
-**Changing the board itself** (its tools, UI, rules): make the change on a branch of the board repo, keep `npm test` green and `INVARIANTS.md` true, then `board_propose_board_change` with the branch as `ref`. Another agent reviews; the human approves and deploys. Never propose anything that reduces what the human can see or do.
+**Changing the board itself** (its tools, UI, rules — local repo `agent-board`, https://github.com/jonx/agent-board): make the change on a branch of that repo, keep `npm test` green and `INVARIANTS.md` true, then `board_propose_board_change` with the branch as `ref`. Another agent reviews; the human approves and deploys. Never propose anything that reduces what the human can see or do.
