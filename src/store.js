@@ -388,16 +388,31 @@ export class Store {
     return this.db.prepare(`SELECT count(*) AS n FROM messages WHERE project_id = ? AND id > ? AND author_id <> ?`).get(projectId, m?.last_read_message_id ?? 0, agent.id).n;
   }
 
-  waitForInbox(agent, projectId, timeoutMs) {
-    if (this.unreadCount(agent, projectId) > 0) return Promise.resolve(true);
-    return new Promise(resolve => {
-      const onChange = (ev) => {
-        if (ev.type === 'message' && ev.projectId === projectId && ev.authorId !== agent.id) done(true);
-      };
-      const timer = setTimeout(() => done(false), timeoutMs);
-      const done = (v) => { clearTimeout(timer); this.bus.off('change', onChange); resolve(v); };
-      this.bus.on('change', onChange);
-    });
+  /** Threads where someone is expecting something from this agent and it has not answered
+   *  since. Replaces "wait for an answer": a returning agent gets a to-do list, not a block. */
+  waitingOnAgent(agent, projectId) {
+    return this.db.prepare(`
+      SELECT t.id, t.kind, t.title, t.status,
+             (SELECT m.body FROM messages m WHERE m.thread_id = t.id ORDER BY m.id DESC LIMIT 1) AS last_body,
+             (SELECT a.name FROM messages m JOIN agents a ON a.id = m.author_id WHERE m.thread_id = t.id ORDER BY m.id DESC LIMIT 1) AS last_author
+      FROM threads t
+      WHERE t.project_id = ? AND t.status IN ('open','changes_requested') AND t.paused_reason IS NULL
+        AND EXISTS (SELECT 1 FROM messages m WHERE m.thread_id = t.id AND m.author_id <> ?
+                     AND (m.mentions LIKE '%"' || ?2b || '"%' OR m.mentions LIKE '%"all"%')
+                     AND m.id > COALESCE((SELECT max(m2.id) FROM messages m2 WHERE m2.thread_id = t.id AND m2.author_id = ?), 0))
+      ORDER BY t.updated_at DESC LIMIT 20`.replace('?2b', '?'))
+      .all(projectId, agent.id, agent.name, agent.id)
+      .map(t => ({ ...t, last_body: (t.last_body ?? '').slice(0, 200) }));
+  }
+
+  /** Questions/reviews this agent opened that nobody has answered yet. */
+  unansweredAsks(agent, projectId) {
+    return this.db.prepare(`
+      SELECT t.id, t.kind, t.title, t.status, t.created_at FROM threads t
+      WHERE t.project_id = ? AND t.created_by = ? AND t.kind IN ('question','review','decision','board-change')
+        AND t.status IN ('open','awaiting_human')
+        AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.thread_id = t.id AND m.author_id <> ?)
+      ORDER BY t.created_at LIMIT 20`).all(projectId, agent.id, agent.id);
   }
 
   // ---------- tasks ----------

@@ -12,7 +12,7 @@ import { THREAD_KINDS, TASK_STATUSES, VERDICTS, ACK_STATES } from './db.js';
 import { VERSION, changelogSince } from './changelog.js';
 
 export const TOOL_NAMES = [
-  'board_projects', 'board_join', 'board_status', 'board_inbox', 'board_wait', 'board_threads', 'board_read', 'board_post',
+  'board_projects', 'board_join', 'board_status', 'board_inbox', 'board_threads', 'board_read', 'board_post',
   'board_ack', 'board_ask', 'board_request_review', 'board_propose_board_change', 'board_resolve',
   'board_journal', 'board_context', 'board_tasks', 'board_task', 'board_claim', 'board_release',
 ];
@@ -20,14 +20,15 @@ export const TOOL_NAMES = [
 export const CONTEXT_THREAD_TITLE = 'Project context';
 
 const PROTOCOL = [
+  'THE BOARD IS ASYNCHRONOUS, LIKE A MAILBOX. You post; the others read it whenever they next work. Never wait for another agent, never ask whether they are connected — it is irrelevant and you cannot know. Post, then get on with something else.',
   'You share this board with other agents (possibly other providers) and with the human, who reads everything.',
-  '1. Start: board_join (pick your name), board_status, then board_inbox. If "Project context" is empty or stale, write it with board_context.',
+  '1. Start: board_join (pick your name), board_status, then board_inbox. Deal with what is on your plate (waiting_on_you) before starting anything new. If "Project context" is empty or stale, write it with board_context.',
   '2. While working: board_claim the paths you edit; board_journal at each milestone (what you did, what is next, what is uncertain).',
   '3. Settle questions between agents; escalate to the human (board_ask critical=true) only for genuinely irreversible choices, formatted so they can answer "ok".',
-  '3b. Someone asked you something you cannot answer right away: board_ack "working" (or "declined" if it is not for you) so they know whether to wait. Answer when you can.',
-  '4. Before an irreversible or architecture-level choice: board_ask with critical=true and wait (board_wait) for the human.',
-  '5. When a step is done: board_request_review; act on verdicts.',
-  '6. Before finishing: board_journal a handoff note, board_release your claims, update board_context if the picture changed.',
+  '4. Asked something you cannot answer right away? board_ack "working" (or "declined"), then answer when you get to it. Asked something you CAN answer? Answer now — an unanswered question stalls someone else.',
+  '5. When a step is done: board_request_review; act on verdicts. Post the request and carry on with other work — do not sit on it.',
+  '6. Blocked on someone else\'s answer: mark the task blocked (board_task), say so in board_journal, and switch to other work. If there is nothing else, write a handoff journal and end your turn — do not idle, do not re-ask, do not ping.',
+  '7. Before finishing: board_journal a handoff note, board_release your claims, update board_context if the picture changed.',
   'Everything you post is public to the whole project. There are no private messages.',
 ];
 
@@ -75,7 +76,7 @@ export function buildMcpServer(store, ctx) {
 
   const projectList = () => store.listProjects().filter(p => !p.archived).map(p => ({
     name: p.name, path: p.path, this_connection: p.id === pid, open_threads: p.open_threads,
-    members: store.members(p.id).map(m => m.name).join(', '), last_message_id: p.last_message_id }));
+    agents: store.members(p.id).map(m => m.name).join(', '), last_message_id: p.last_message_id }));
 
   reg('board_projects',
     `List the projects that exist on this board (name, registered path, members, activity). Use it to check you are on the right one: project names must match exactly, a typo or a different spelling creates a separate, empty project. This connection is bound to "${project.name}". If the repo you work in is registered under another name, stop and tell the human (or reconnect with the right name).`,
@@ -111,14 +112,14 @@ export function buildMcpServer(store, ctx) {
     }, { open: true });
 
   reg('board_status',
-    `Your entry point after board_join. Returns the project brief (latest "Project context"), who is here, recent journal entries, active path claims, tasks in progress, threads that need attention, and your unread count. Before joining it only tells you how to join.`,
+    `Your entry point after board_join. Returns the project brief (latest "Project context"), who is on the project, recent journal entries, active path claims, tasks in progress, what other agents are waiting on from YOU (waiting_on_you), the asks of yours nobody has answered yet, and your unread count. Before joining it only tells you how to join.`,
     { project_path: z.string().optional().describe('Absolute path of the project root, to register it if unknown') },
     ({ project_path }) => {
       if (!agent) {
         return { joined: false, project: { id: pid, name: project.name }, provider: ctx.provider, protocol: PROTOCOL,
           how: `Call board_join with a name (pass project_path so the repo is registered). Suggested free name: "${suggestName()}". Check board_projects if unsure this is the right project.`,
         other_projects: projectList().filter(p => !p.this_connection).map(p => p.name),
-          agents_on_this_project: store.members(pid).map(m => ({ name: m.name, provider: m.provider, live: !!ctx.registry.holder(m.name), last_seen_at: m.last_seen_at })) };
+          agents_on_this_project: store.members(pid).map(m => ({ name: m.name, provider: m.provider })) };
       }
       if (project_path) store.ensureProject(project.name, project_path, agent);
       const p = store.getProject(pid);
@@ -129,7 +130,9 @@ export function buildMcpServer(store, ctx) {
         project: { id: p.id, name: p.name, path: p.path },
         protocol: PROTOCOL,
         project_context: brief ?? 'EMPTY — you are probably the first agent here. Write a brief with board_context (goal, stack, layout, conventions, current state) so the next agent can start without re-discovering everything.',
-        members: store.members(pid).map(m => ({ name: m.name, role: m.role, provider: m.provider, paused: !!m.paused_reason, live: !!ctx.registry.holder(m.name), last_seen_at: m.last_seen_at })),
+        members: store.members(pid).map(m => ({ name: m.name, role: m.role, provider: m.provider, paused: !!m.paused_reason })),
+        waiting_on_you: store.waitingOnAgent(agent, pid),
+        your_unanswered_asks: store.unansweredAsks(agent, pid),
         recent_journal: recentJournal(),
         active_claims: store.activeClaims(pid).map(c => ({ path: c.path, by: c.agent, note: c.note, expires_at: c.expires_at })),
         tasks_in_progress: store.listTasks(pid).filter(t => t.status !== 'done').map(t => ({ id: t.id, title: t.title, status: t.status, owner: t.owner })),
@@ -139,20 +142,12 @@ export function buildMcpServer(store, ctx) {
     }, { open: true });
 
   reg('board_inbox',
-    'Unread messages in this project (from every agent and the human), grouped by thread. Marks them read unless peek=true. Messages from the human and threads mentioning you come first.',
+    'Unread messages in this project (from every agent and the human), grouped by thread. Marks them read unless peek=true. Messages from the human and threads mentioning you come first. Call it between work steps — it is how the board reaches you; there is no push and nothing to wait for.',
     { peek: z.boolean().optional(), limit: z.number().int().min(1).max(500).optional() },
     ({ peek = false, limit = 100 }) => {
       const r = store.inbox(agent, pid, { peek, limit });
       for (const t of r.threads) { const a = store.threadAcks(t.thread_id); if (a.length) t.acks = a.map(x => `${x.agent}: ${x.state}${x.note ? ` (${x.note})` : ''}`); }
       return r;
-    });
-
-  reg('board_wait',
-    'Block until a new message arrives in this project (or timeout). Use after asking a question or requesting a review instead of polling. Returns the inbox when something arrives.',
-    { timeout_seconds: z.number().min(1).max(600).optional().describe('default 120') },
-    async ({ timeout_seconds = 120 }) => {
-      const got = await store.waitForInbox(agent, pid, timeout_seconds * 1000);
-      return got ? { arrived: true, ...store.inbox(agent, pid) } : { arrived: false, unread: 0, hint: 'nothing new yet; you may keep working or wait again' };
     });
 
   reg('board_threads', 'List threads in this project.',
@@ -194,11 +189,11 @@ export function buildMcpServer(store, ctx) {
     { title: z.string().min(1), body: z.string().min(1).describe('context, options considered, your recommendation'), critical: z.boolean().optional(), to: z.array(z.string()).optional() },
     ({ title, body, critical = false, to = [] }) => {
       const t = store.createThread(agent, { projectId: pid, kind: critical ? 'decision' : 'question', title, body, mentions: to });
-      return { ...summary(t), next: critical ? 'Wait for the human: board_wait then board_read; proceed only when status is approved.' : 'Others will answer in this thread. board_wait blocks until something arrives; board_read shows who has read it (last_message_read_by) and who acknowledged it (acks), so you know whether an answer is coming before you decide to wait or move on.' };
+      return { ...summary(t), next: critical ? 'Do not proceed and do not idle: mark the affected task blocked, journal why, and switch to other work (or end your turn with a handoff note). Check the status on your next board_inbox; proceed only when it shows approved.' : 'Posted. Now go and do something else — the others will read it when they next work; nobody is necessarily at a keyboard. Check back on your next board_inbox; board_read shows any acks and who has read it.' };
     });
 
   reg('board_request_review',
-    'Ask for a review of finished work (a commit, branch, PR, diff or set of files). Give the reviewer what they need: what changed, why, how to verify. The reviewer answers with a verdict.',
+    'Ask for a review of finished work (a commit, branch, PR, diff or set of files). Give the reviewer what they need: what changed, why, how to verify. Post it and move on to other work — the review arrives whenever the reviewer next reads the board; do not wait on it and do not chase it.',
     { title: z.string().min(1), ref: z.string().min(1).describe('commit sha, branch, PR URL, or path list'), body: z.string().min(1), reviewer: z.string().optional().describe('agent name; omit to let anyone review') },
     ({ title, ref, body, reviewer }) => summary(store.createThread(agent, { projectId: pid, kind: 'review', title, body, ref, mentions: reviewer ? [reviewer] : ['all'] })));
 

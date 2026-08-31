@@ -68,8 +68,8 @@ test('two providers coordinate through the board with the human watching', async
   const inbox = await codex.call('board_inbox');
   assert.ok(inbox.threads.some(t => t.thread_id === q.id && t.mentions_you));
   await codex.call('board_post', { thread_id: q.id, body: 'Sessions, simpler to revoke. @claude' });
-  const waited = await claude.call('board_wait', { timeout_seconds: 5 });
-  assert.equal(waited.arrived, true);
+  assert.equal((await claude.call('board_inbox')).unread, 1, 'the answer is simply there on the next inbox check');
+  assert.ok((await codex.call('board_status')).waiting_on_you !== undefined, 'status tells an agent what is on its plate');
 
   // Critical decision: agent approval is advisory, human decides.
   const dec = await claude.call('board_ask', { title: 'Drop legacy users table', body: 'Irreversible.', critical: true });

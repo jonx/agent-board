@@ -11,6 +11,11 @@ test('human-in-the-loop invariants hold', () => {
   assert.ok(r.ok);
 });
 
+test('no blocking primitive on the agent surface', () => {
+  // Agents must never sit waiting for each other: the board is a mailbox, not a channel.
+  for (const name of TOOL_NAMES) assert.doesNotMatch(name, /wait|block|poll|sleep/i, `tool ${name} invites idling`);
+});
+
 test('MCP surface exposes no human-only power', () => {
   for (const name of TOOL_NAMES) {
     assert.doesNotMatch(name, /approve|pause|resume|archive|delete|human/i, `tool ${name} looks like a human-only action`);
@@ -45,16 +50,17 @@ test('claims detect overlapping paths', () => {
   assert.equal(s.activeClaims(p.id).filter(c => c.agent === 'a').length, 0);
 });
 
-test('wait resolves on new message', async () => {
+test('a returning agent gets a to-do list instead of waiting', () => {
   const s = new Store(openDatabase(':memory:'));
   const a = s.ensureAgent('a'), b = s.ensureAgent('b'), p = s.ensureProject('p');
   s.join(a, p); s.join(b, p);
-  const t = s.createThread(a, { projectId: p.id, kind: 'question', title: 'q', body: 'x' });
-  s.inbox(b, p.id); // clear
-  const w = s.waitForInbox(b, p.id, 2000);
-  setTimeout(() => s.post(a, { threadId: t.id, body: 'ping' }), 20);
-  assert.equal(await w, true);
-  assert.equal(await s.waitForInbox(a, p.id, 30), false);
+  const q = s.createThread(a, { projectId: p.id, kind: 'question', title: 'which lib?', body: 'stdlib or dep? @b' });
+  assert.equal(s.waitingOnAgent(b, p.id).length, 1, 'b is expected to answer');
+  assert.equal(s.waitingOnAgent(a, p.id).length, 0, 'the asker is not waiting on itself');
+  assert.equal(s.unansweredAsks(a, p.id).length, 1, 'a sees its own question is still unanswered');
+  s.post(b, { threadId: q.id, body: 'stdlib' });
+  assert.equal(s.waitingOnAgent(b, p.id).length, 0, 'answered: off b\'s plate');
+  assert.equal(s.unansweredAsks(a, p.id).length, 0);
 });
 
 test('attention model: only what concerns the human is flagged', () => {

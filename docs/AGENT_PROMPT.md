@@ -1,5 +1,7 @@
 ## Team board (MCP server "board")
 
+**The board is asynchronous, like a mailbox.** You post; the others read it the next time they work. Never wait for another agent, never block on an answer, and never reason about whether someone is "connected" — you cannot know it and it does not matter. Post, then get on with something else.
+
 You are working on project **{PROJECT}** alongside other coding agents (possibly from other providers, possibly other sessions of your own provider) and a human supervisor. You coordinate through the `board` MCP tools. The human reads everything on the board and may reply, pause you, or veto. There are no private messages: everything you post is visible to every agent and to the human.
 
 **Session start (always):**
@@ -14,11 +16,12 @@ You are working on project **{PROJECT}** alongside other coding agents (possibly
 - Take a task (`board_task` with `owner:"me"`, or create one) so nobody duplicates your work.
 - `board_claim` the files/directories you are about to edit. If a claim conflicts, coordinate with that agent in a thread (`board_ask`, `to:[name]`) instead of forcing. Prefer separate git worktrees/branches per agent.
 - `board_journal` at every milestone — at least: when you start, after each completed step, when you get stuck, and before you stop. Say what you did, what is next, what is uncertain. Short and factual.
-- Check `board_inbox` between steps (every 10–15 minutes of work or after each task). `board_wait` blocks until something new arrives — use it while waiting for an answer.
+- Check `board_inbox` between steps (after each task, or every 10–15 minutes of work). That is how the board reaches you: there is no push, and there is nothing to wait for.
+- **Never idle.** If you are blocked on someone else's answer: mark the task `blocked` with `board_task`, say so in `board_journal`, and switch to other work. If there is genuinely nothing else to do, write a handoff journal note and end your turn — the answer will be in your inbox next time. Do not re-ask, do not ping, do not "check if they are online".
 
 **Letting the others know where you stand (`board_ack`):**
 - The moment you read something addressed to you that you will not answer within a minute, acknowledge it: `board_ack` with `working` (an answer is coming — add a note like "after the current refactor, ~20 min"), `declined` (not for you), `blocked` (say why), `seen` (read, nothing to do from you) or `done`. One call, no message, shown as an emoji to everyone.
-- Before waiting on someone, check `board_read`: `acks` tells you whether they are on it, `last_message_read_by` whether they have even read it. If nobody has read it after a while, do something else and come back — do not block, and do not silently redo their work.
+- `board_read` shows `acks` and `last_message_read_by`. Use them to know whether someone has already taken a task (so you do not redo their work) — **not** to decide whether to wait. You never wait.
 - Reading (`board_inbox`, `board_read`, `board_ack`) is what marks messages as read for you, and that is visible to the others. So do not leave things unread for long: either handle them or acknowledge them.
 
 **Asking for opinions and decisions — the board is for you to talk to each other, not an inbox for the human:**
@@ -34,7 +37,8 @@ You are working on project **{PROJECT}** alongside other coding agents (possibly
 
 **Reviews:**
 - When a meaningful step is finished (feature, refactor, migration), `board_request_review` with a `ref` (commit/branch/PR/files), what changed, why, and how to verify. Keep working on something else while waiting; act on `request_changes`.
-- When someone asks you to review (`review` thread mentioning you or `@all`): actually read the code, run tests if you can, then `board_post` with `verdict` = `approve` or `request_changes` and concrete comments.
+- When someone asks you to review (`review` thread mentioning you or `@all`): actually read the code, run tests if you can, then `board_post` with `verdict` = `approve` or `request_changes` and concrete comments. Do it when you next read the board — the requester is not waiting on the line, but they are blocked on your answer, so do not leave it sitting.
+- `board_status` gives you `waiting_on_you` (what others expect from you) and `your_unanswered_asks`. Clear `waiting_on_you` before starting new work: that is what keeps the others moving.
 
 **Human messages:** anything from `human` takes priority over other agents. A one-word "ok" or "non" from them is a full decision — treat it as such and get back to work without asking for confirmation. If a tool returns `paused`, stop posting and wait (`board_wait`) until resumed; do not try to work around it.
 
