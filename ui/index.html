@@ -48,7 +48,6 @@
   .fitem .meta { color:var(--muted); font-size:11.5px; text-align:right } .fitem .meta b { display:block; color:var(--fg); font-size:12.5px; font-weight:600 }
   .fitem .what { min-width:0 } .fitem .th { font-size:11.5px; color:var(--muted); margin-bottom:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis }
   .fitem .txt { display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; white-space:pre-wrap; line-height:1.4 }
-  .fitem.new { box-shadow: inset 3px 0 0 var(--accent); padding-left:9px } .fitem.new .meta b { color:var(--accent) }
   .fitem.system { padding:3px 0; opacity:.65 } .fitem.system .th { font-style:italic; white-space:nowrap; overflow:hidden; text-overflow:ellipsis } .fitem.human { background:var(--human-bg) } .fitem.human .meta b { color:var(--human) }
   .acks { display:flex; gap:5px; flex-wrap:wrap; align-items:center } .ack { font-size:11px; padding:1px 7px 1px 5px; border-radius:10px; border:1px solid var(--line); background:var(--bg); white-space:nowrap; cursor:default }
   .ack b { font-weight:600 } .item .acks { margin-top:3px }
@@ -235,19 +234,36 @@ async function selectProject(id) { S.project = id; try { localStorage.setItem('b
  *  so "what has been said lately, and where things stand" is one glance. */
 async function showActivity() {
   if (!S.project || S.thread) return;
-  const feed = await api(`/api/projects/${S.project}/activity?limit=60`);
+  const all = await api(`/api/projects/${S.project}/activity?limit=120`);
   const name = S.projects.find(p => p.id === S.project)?.name ?? '';
+  const authors = [...new Set(all.filter(m => m.kind !== 'system').map(m => m.author))].sort();
+  if (S.feedWho && !authors.includes(S.feedWho)) S.feedWho = null;
+  const feed = (S.feedWho ? all.filter(m => m.author === S.feedWho) : all).slice(-60);
+  // One line where the new stuff starts, rather than a mark on every message.
+  const seen = S.readById && S.readById.size ? Math.max(...S.readById.values()) : 0;
+  const firstNew = feed.find(m => m.id > seen && m.kind !== 'system')?.id ?? null;
+  // Runs of board notices collapse into one line: they are housekeeping, not conversation.
+  const items = [];
+  for (const m of feed) {
+    const prev = items[items.length - 1];
+    if (m.kind === 'system' && prev?.kind === 'system') { prev.count++; prev.created_at = m.created_at; prev.body = m.body; prev.id = m.id; }
+    else items.push({ ...m, count: 1 });
+  }
   let day = null;
-  const rows = feed.map(m => {
+  const rows = items.map(m => {
     const d = dayLabel(m.created_at), sep = d !== day ? `<div class="day"><span>${d}</span></div>` : ''; day = d;
-    const fresh = m.id > (S.readById?.get(m.thread_id) ?? 0) ? ' new' : '';
-    if (m.kind === 'system') return `${sep}<div class="fitem system" data-t="${m.thread_id}"><div class="meta">${fmt(m.created_at)}</div><div class="what"><div class="th">${esc(oneLine(m.body.split('\n')[0], 120))}</div></div></div>`;
-    return `${sep}<div class="fitem ${m.author_role}${fresh}" data-t="${m.thread_id}">
+    const mark = m.id === firstNew ? '<div class="newline">new since your last visit</div>' : '';
+    if (m.kind === 'system') return `${sep}${mark}<div class="fitem system" data-t="${m.thread_id}" title="Board housekeeping — click to open the thread"><div class="meta">${fmt(m.created_at)}</div><div class="what"><div class="th">${m.count > 1 ? `${m.count} board notices · ` : ''}${esc(oneLine(m.body.split('\n')[0], 110))}</div></div></div>`;
+    return `${sep}${mark}<div class="fitem ${m.author_role}" data-t="${m.thread_id}" title="Open the thread &ldquo;${esc(m.title)}&rdquo;">
       <div class="meta"><b>${esc(m.author)}</b>${fmt(m.created_at)}</div>
-      <div class="what"><div class="th">${esc(m.title)}${m.verdict ? ` · <b>${m.verdict.replace('_', ' ')}</b>` : ''}</div><div class="txt">${esc(oneLine(m.body, 300))}</div></div></div>`;
+      <div class="what"><div class="th">${esc(m.title)}${m.verdict ? ` &middot; <b>${m.verdict.replace('_', ' ')}</b>` : ''}</div><div class="txt">${esc(oneLine(m.body, 300))}</div></div></div>`;
   }).join('');
-  $('#thread').innerHTML = `<div class="feed"><h3>${esc(name)} — recent activity</h3>${rows || '<div class="empty">Nothing said yet on this project.</div>'}</div>`;
-  $('#thread').scrollTop = $('#thread').scrollHeight;
+  const chips = authors.map(a => `<button class="${S.feedWho === a ? 'on' : ''}" data-who="${esc(a)}" title="Show only what ${esc(a)} said">${esc(a)}</button>`).join('');
+  $('#thread').innerHTML = `<div class="filters"><span class="lbl">who:</span><button class="${S.feedWho ? '' : 'on'}" data-who="" title="Show everyone">everyone</button>${chips}</div>
+    <div class="feed"><h3>${esc(name)} &mdash; recent activity</h3>${rows || '<div class="empty">Nothing said yet on this project.</div>'}</div>`;
+  $('#thread').querySelectorAll('[data-who]').forEach(b => b.onclick = (e) => { e.stopPropagation(); S.feedWho = b.dataset.who || null; showActivity(); });
+  const nl = $('#thread .newline');
+  if (nl) nl.scrollIntoView({ block: 'center' }); else $('#thread').scrollTop = $('#thread').scrollHeight;
 }
 $('#thread').addEventListener('click', (e) => { const f = e.target.closest('.fitem[data-t]'); if (f) openThread(Number(f.dataset.t)); });
 
