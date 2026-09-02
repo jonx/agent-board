@@ -147,6 +147,10 @@ export function createHttpServer({ store, humanToken, uiFile, registry = new Ses
         const ctxMsgs = ctx ? store.threadMessages(ctx.id) : [];
         return json(res, 200, { project: pr, members: store.members(pr.id).map(m => ({ ...m, live: !!registry.holder(m.name) })), tasks: store.listTasks(pr.id), claims: store.activeClaims(pr.id), context: ctxMsgs[ctxMsgs.length - 1] ?? null, context_thread_id: ctx?.id ?? null });
       }
+      if (seg[0] === 'projects' && seg[2] === 'activity') {
+        const pr = store.getProject(/^\d+$/.test(seg[1]) ? id(seg[1]) : seg[1]); if (!pr) return json(res, 404, { error: 'not_found' });
+        return json(res, 200, store.activity(pr.id, Math.min(Number(q.get('limit') ?? 60), 200)));
+      }
       if (seg[0] === 'projects' && seg[2] === 'messages') { // feed: /api/projects/<id|name>/messages?since=ID
         const pr = store.getProject(/^\d+$/.test(seg[1]) ? id(seg[1]) : seg[1]); if (!pr) return json(res, 404, { error: 'not_found' });
         return json(res, 200, { last_id: store.db.prepare('SELECT COALESCE(max(id),0) AS n FROM messages WHERE project_id = ?').get(pr.id).n, messages: store.messagesSince(pr.id, Number(q.get('since') ?? 0), Number(q.get('limit') ?? 50)) });

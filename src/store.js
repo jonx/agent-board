@@ -137,7 +137,10 @@ export class Store {
     return this.db.prepare(`
       SELECT t.*, a.name AS created_by_name,
         (SELECT count(*) FROM messages m WHERE m.thread_id = t.id) AS message_count,
-        (SELECT max(m.id) FROM messages m WHERE m.thread_id = t.id) AS last_message_id
+        (SELECT max(m.id) FROM messages m WHERE m.thread_id = t.id) AS last_message_id,
+        (SELECT la.name FROM messages m JOIN agents la ON la.id = m.author_id WHERE m.thread_id = t.id ORDER BY m.id DESC LIMIT 1) AS last_author,
+        (SELECT substr(m.body, 1, 180) FROM messages m WHERE m.thread_id = t.id ORDER BY m.id DESC LIMIT 1) AS last_body,
+        (SELECT m.created_at FROM messages m WHERE m.thread_id = t.id ORDER BY m.id DESC LIMIT 1) AS last_at
       FROM threads t JOIN agents a ON a.id = t.created_by
       WHERE ${where.join(' AND ')} ORDER BY t.updated_at DESC LIMIT ?`).all(...args);
   }
@@ -170,6 +173,15 @@ export class Store {
         const attention = attentionOf(t);
         return { ...t, attention, unread_for_human: attention !== 'ambient' && (t.last_message_id ?? 0) > t.human_read_id };
       });
+  }
+
+  /** The last N messages of a project, oldest first: "what has been said lately", across threads. */
+  activity(projectId, limit = 60) {
+    return this.db.prepare(`
+      SELECT m.id, m.thread_id, t.title, t.kind AS thread_kind, t.status, a.name AS author, a.role AS author_role,
+             m.body, m.verdict, m.kind, m.created_at
+      FROM messages m JOIN agents a ON a.id = m.author_id JOIN threads t ON t.id = m.thread_id
+      WHERE m.project_id = ? ORDER BY m.id DESC LIMIT ?`).all(projectId, limit).reverse();
   }
 
   /** Project-wide feed (for the human UI/hooks): messages after sinceId. */

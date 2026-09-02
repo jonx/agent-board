@@ -39,6 +39,17 @@
   .composer { border-top:1px solid var(--line); padding:10px 16px; background:var(--panel); position:sticky; bottom:0 } textarea { width:100%; min-height:70px; font:inherit; padding:8px; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--fg); resize:vertical }
   .actions { display:flex; gap:6px; margin-top:6px; flex-wrap:wrap; align-items:center } .actions .sp { flex:1 }
   .empty { padding:30px; color:var(--muted); text-align:center }
+  .item .preview { color:var(--muted); font-size:12px; margin-top:3px; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; line-height:1.35 }
+  .item .preview b { color:var(--fg); font-weight:600 }
+  .day { text-align:center; color:var(--muted); font-size:11px; margin:14px 0 6px; position:relative } .day::before { content:''; position:absolute; left:0; right:0; top:50%; border-top:1px solid var(--line); z-index:0 } .day span { position:relative; background:var(--panel); padding:0 10px; z-index:1 }
+  .msgs .msg.cont { border-top:0; padding-top:2px } .msgs .msg.cont .who { visibility:hidden }
+  .feed { padding:8px 16px 16px } .feed h3 { font-size:12px; text-transform:uppercase; letter-spacing:.5px; color:var(--muted); margin:12px 0 6px }
+  .fitem { display:grid; grid-template-columns:104px 1fr; gap:10px; padding:7px 0; border-bottom:1px solid var(--line); cursor:pointer } .fitem:hover { background:var(--sel) }
+  .fitem .meta { color:var(--muted); font-size:11.5px; text-align:right } .fitem .meta b { display:block; color:var(--fg); font-size:12.5px; font-weight:600 }
+  .fitem .what { min-width:0 } .fitem .th { font-size:11.5px; color:var(--muted); margin-bottom:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis }
+  .fitem .txt { display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; white-space:pre-wrap; line-height:1.4 }
+  .fitem.new { box-shadow: inset 3px 0 0 var(--accent); padding-left:9px } .fitem.new .meta b { color:var(--accent) }
+  .fitem.system { padding:3px 0; opacity:.65 } .fitem.system .th { font-style:italic; white-space:nowrap; overflow:hidden; text-overflow:ellipsis } .fitem.human { background:var(--human-bg) } .fitem.human .meta b { color:var(--human) }
   .acks { display:flex; gap:5px; flex-wrap:wrap; align-items:center } .ack { font-size:11px; padding:1px 7px 1px 5px; border-radius:10px; border:1px solid var(--line); background:var(--bg); white-space:nowrap; cursor:default }
   .ack b { font-weight:600 } .item .acks { margin-top:3px }
   .ackbar { display:flex; gap:4px; align-items:center; margin-left:auto } .ackbar button { padding:2px 7px; font-size:13px; line-height:1.3 }
@@ -93,7 +104,28 @@
 <script>
 const $ = (s, el = document) => el.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-const fmt = (iso) => { const d = new Date(iso); const today = new Date().toDateString() === d.toDateString(); return today ? d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : d.toLocaleString([], {month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'}); };
+const abs = (iso) => new Date(iso).toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+const rel = (iso) => {
+  const s = Math.floor((Date.now() - new Date(iso)) / 1000);
+  if (s < 0) return 'just now';
+  if (s < 10) return 'just now';
+  if (s < 60) return `${s}s ago`;
+  const m = Math.floor(s / 60); if (m < 60) return `${m} min ago`;
+  const h = Math.floor(m / 60); if (h < 24) return `${h} h ago`;
+  const d = Math.floor(h / 24); if (d < 7) return `${d} d ago`;
+  return new Date(iso).toLocaleDateString([], { month: 'short', day: 'numeric' });
+};
+// Rendered as <time data-t> so a ticker can refresh the words without touching the DOM around them.
+const fmt = (iso) => `<time data-t="${iso}" title="${abs(iso)}">${rel(iso)}</time>`;
+const tickTimes = () => document.querySelectorAll('time[data-t]').forEach(el => { const t = rel(el.dataset.t); if (el.textContent !== t) el.textContent = t; });
+setInterval(tickTimes, 5000);
+const dayLabel = (iso) => {
+  const d = new Date(iso), today = new Date(), y = new Date(Date.now() - 86400000);
+  if (d.toDateString() === today.toDateString()) return 'Today';
+  if (d.toDateString() === y.toDateString()) return 'Yesterday';
+  return d.toLocaleDateString([], { weekday: 'long', month: 'short', day: 'numeric' });
+};
+const oneLine = (s, n = 160) => { const t = String(s ?? '').replace(/\s+/g, ' ').trim(); return t.length > n ? t.slice(0, n) + '…' : t; };
 // Minimal, safe Markdown: input is HTML-escaped first, links restricted to http(s).
 const inline = (t) => {
   const codes = [];
@@ -172,14 +204,15 @@ async function loadProjects() {
   // Server decides what is unread (same answer for the UI, the CLI and the scripts).
   S.unreadByProject = {};
   S.unreadThreads = new Set(index.filter(isUnread).map(t => t.id));
+  S.readById = new Map(index.map(t => [t.id, t.human_read_id ?? 0]));
   for (const t of index) if (isUnread(t)) S.unreadByProject[t.project_id] = (S.unreadByProject[t.project_id] ?? 0) + 1;
-  const el = $('#projects'), asideTop = el.parentElement === document.body ? 0 : el.scrollTop;
-  el.innerHTML = S.projects.map(p => {
+  const el = $('#projects'), asideTop = el.scrollTop;
+  const html = S.projects.map(p => {
     const n = S.unreadByProject[p.id] ?? 0;
     return `<div class="item ${p.id === S.project ? 'sel' : ''} ${n ? 'unread' : ''}" data-id="${p.id}"><div class="t"><span class="title">${esc(p.name)}</span>${n ? `<span class="count" title="${n} thread(s) waiting on you">${n}</span>` : ''}${p.awaiting_human ? `<span class="badge h">${p.awaiting_human} waiting</span>` : ''}</div><div class="m">${p.open_threads} active${p.archived ? ' · archived' : ''}</div></div>`;
   }).join('') || '<div class="empty">No project yet.<br>One is created when the first agent connects.</div>';
-  el.scrollTop = asideTop;
-  el.querySelectorAll('.item').forEach(i => i.onclick = () => selectProject(Number(i.dataset.id)));
+  if (el.dataset.sig !== html) { el.dataset.sig = html; el.innerHTML = html; el.scrollTop = asideTop; }
+  el.onclick = (e) => { const it = e.target.closest('.item'); if (it) selectProject(Number(it.dataset.id)); };
   $('#newThread').disabled = !S.project || !token;
   const totalWaiting = S.projects.reduce((n, p) => n + p.awaiting_human, 0);
   const totalUnread = Object.values(S.unreadByProject).reduce((a, b) => a + b, 0);
@@ -190,7 +223,27 @@ async function loadProjects() {
   updateHash();
   if (S.project) await loadThreads();
 }
-async function selectProject(id) { S.project = id; try { localStorage.setItem('board_project', id); } catch {} S.thread = null; $('#thread').innerHTML = '<div class="empty">Pick a thread.</div>'; await loadProjects(); updateHash(); }
+async function selectProject(id) { S.project = id; try { localStorage.setItem('board_project', id); } catch {} S.thread = null; await loadProjects(); updateHash(); await showActivity(); }
+
+/** The right pane, when no thread is open: the project's recent messages in order,
+ *  so "what has been said lately, and where things stand" is one glance. */
+async function showActivity() {
+  if (!S.project || S.thread) return;
+  const feed = await api(`/api/projects/${S.project}/activity?limit=60`);
+  const name = S.projects.find(p => p.id === S.project)?.name ?? '';
+  let day = null;
+  const rows = feed.map(m => {
+    const d = dayLabel(m.created_at), sep = d !== day ? `<div class="day"><span>${d}</span></div>` : ''; day = d;
+    const fresh = m.id > (S.readById?.get(m.thread_id) ?? 0) ? ' new' : '';
+    if (m.kind === 'system') return `${sep}<div class="fitem system" data-t="${m.thread_id}"><div class="meta">${fmt(m.created_at)}</div><div class="what"><div class="th">${esc(oneLine(m.body.split('\n')[0], 120))}</div></div></div>`;
+    return `${sep}<div class="fitem ${m.author_role}${fresh}" data-t="${m.thread_id}">
+      <div class="meta"><b>${esc(m.author)}</b>${fmt(m.created_at)}</div>
+      <div class="what"><div class="th">${esc(m.title)}${m.verdict ? ` · <b>${m.verdict.replace('_', ' ')}</b>` : ''}</div><div class="txt">${esc(oneLine(m.body, 300))}</div></div></div>`;
+  }).join('');
+  $('#thread').innerHTML = `<div class="feed"><h3>${esc(name)} — recent activity</h3>${rows || '<div class="empty">Nothing said yet on this project.</div>'}</div>`;
+  $('#thread').scrollTop = $('#thread').scrollHeight;
+}
+$('#thread').addEventListener('click', (e) => { const f = e.target.closest('.fitem[data-t]'); if (f) openThread(Number(f.dataset.t)); });
 
 const ACTIVE = new Set(['open', 'awaiting_human', 'changes_requested']);
 const needsMe = (t) => (t.attention ?? 'ambient') !== 'ambient';
@@ -212,23 +265,44 @@ async function loadThreads() {
   const can = !!token;
   const list = lists[S.filter];
   S.threads = list;
-  $('#threads').innerHTML = list.map(t => `<div class="item ${t.id === S.thread ? 'sel' : ''} ${unread(t) ? 'unread' : ''}" data-id="${t.id}">
+  const html = list.map(t => `<div class="item" data-id="${t.id}">
       <div class="t"><span class="badge k">${t.kind}</span><span class="title" title="${esc(t.title)}">${esc(t.title)}</span></div>
-      <div class="m"><span class="badge ${t.status}">${t.status.replace('_', ' ')}</span>${t.paused_reason ? '<span class="badge paused">paused</span>' : ''}<span>${esc(t.created_by_name)}</span><span>${t.message_count} msg</span><span>${fmt(t.updated_at)}</span></div>
+      <div class="m"><span class="badge ${t.status}">${t.status.replace('_', ' ')}</span>${t.paused_reason ? '<span class="badge paused">paused</span>' : ''}<span>${t.message_count} msg</span><span>${fmt(t.last_at ?? t.updated_at)}</span></div>
+      ${t.last_body ? `<div class="preview"><b>${esc(t.last_author ?? '')}:</b> ${esc(oneLine(t.last_body))}</div>` : ''}
       ${t.acks?.length ? `<div class="acks">${ackChips(t.acks)}</div>` : ''}
       ${can && t.status === 'awaiting_human' ? `<div class="decide" data-for="${t.id}"><input class="why" placeholder="optional note"><button class="ok" data-d="approve">ok</button><button class="bad" data-d="reject">non</button></div>` : ''}</div>`).join('')
     || `<div class="empty">${S.filter === 'attention' ? 'Nothing needs you right now.' : 'No threads.'}</div>`;
-  restore();
-  $('#threads').querySelectorAll('.item').forEach(i => i.onclick = (e) => { if (e.target.closest('.decide')) return; openThread(Number(i.dataset.id)); });
-  $('#threads').querySelectorAll('.decide').forEach(d => {
-    d.onclick = (e) => e.stopPropagation();
-    d.querySelectorAll('[data-d]').forEach(b => b.onclick = async () => {
-      const v = b.dataset.d, note = d.querySelector('.why').value.trim() || (v === 'approve' ? 'ok' : 'non');
-      await api(`/api/threads/${d.dataset.for}/messages`, { body: note, verdict: v });
-      await api(`/api/threads/${d.dataset.for}/read`, {}); loadThreads(); loadProjects();
-    });
+  // Re-rendering under the cursor swallows clicks, so only touch the DOM when something changed.
+  const el = $('#threads');
+  if (el.dataset.sig !== html) { el.dataset.sig = html; el.innerHTML = html; restore(); }
+  paintRowState();
+}
+
+/** Selection and unread are applied as classes on existing nodes: they never rebuild the
+ *  list, so a click can never land on a node that is being replaced. */
+function paintRowState() {
+  document.querySelectorAll('#threads .item[data-id]').forEach(i => {
+    const id = Number(i.dataset.id);
+    i.classList.toggle('sel', id === S.thread);
+    i.classList.toggle('unread', !!S.unreadThreads?.has(id));
   });
 }
+
+// One delegated handler, attached once: it survives every re-render.
+$('#threads').onclick = async (e) => {
+  const dec = e.target.closest('[data-d]');
+  if (dec) {
+    const d = dec.closest('.decide'), v = dec.dataset.d;
+    const note = d.querySelector('.why').value.trim() || (v === 'approve' ? 'ok' : 'non');
+    await api(`/api/threads/${d.dataset.for}/messages`, { body: note, verdict: v });
+    await api(`/api/threads/${d.dataset.for}/read`, {});
+    await loadProjects();
+    return;
+  }
+  if (e.target.closest('.decide')) return;              // typing in the note field
+  const it = e.target.closest('.item[data-id]');
+  if (it) openThread(Number(it.dataset.id));
+};
 
 async function renderTeam() {
   const d = S.detail ?? (S.detail = await api(`/api/projects/${S.project}`));
@@ -263,9 +337,8 @@ async function openThread(id) {
   const { thread: t, messages, acks, read_by } = await api(`/api/threads/${id}`);
   S.messages = messages;
   if (messages.length && token) await api(`/api/threads/${id}/read`, { up_to: messages[messages.length - 1].id });
-  document.querySelector(`#threads .item[data-id="${id}"]`)?.classList.remove('unread');
   S.unreadThreads?.delete(id);
-  loadProjects();
+  paintRowState();
   $('#threads').querySelectorAll('.item').forEach(i => i.classList.toggle('sel', Number(i.dataset.id) === id));
   const can = !!token;
   const gated = !!t.needs_human;
@@ -277,7 +350,12 @@ async function openThread(id) {
         <button class="warn" id="pauseT">${t.paused_reason ? 'resume thread' : 'pause thread'}</button>
         ${['approved','rejected','resolved'].includes(t.status) ? '<button id="reopenT">reopen</button>' : '<button id="resolveT">resolve</button>'}` : ''}
       </div>${acks?.length ? `<div class="acks" style="margin-top:8px">${ackChips(acks)}</div>` : ''}</div>
-    <div class="msgs">${messages.map(m => `<div class="msg ${m.kind === 'system' ? 'system' : m.author_role}"><div class="who">${esc(m.author)}<small>${fmt(m.created_at)}</small></div><div class="body">${m.verdict ? `<div class="verdict">${m.verdict.replace('_',' ').toUpperCase()}${gated && m.author_role !== 'human' ? ' (advisory)' : ''}</div>` : ''}${render(m.body)}</div></div>`).join('') || '<div class="empty">No messages.</div>'}</div>
+    <div class="msgs">${messages.map((m, i) => {
+      const prev = messages[i - 1];
+      const newDay = !prev || new Date(prev.created_at).toDateString() !== new Date(m.created_at).toDateString();
+      const cont = !newDay && prev && prev.author === m.author && prev.kind === m.kind && (new Date(m.created_at) - new Date(prev.created_at)) < 5 * 60000;
+      return `${newDay ? `<div class="day"><span>${dayLabel(m.created_at)}</span></div>` : ''}<div class="msg ${m.kind === 'system' ? 'system' : m.author_role}${cont ? ' cont' : ''}"><div class="who">${esc(m.author)}<small>${fmt(m.created_at)}</small></div><div class="body">${m.verdict ? `<div class="verdict">${m.verdict.replace('_',' ').toUpperCase()}${gated && m.author_role !== 'human' ? ' (advisory)' : ''}</div>` : ''}${render(m.body)}</div></div>`;
+    }).join('') || '<div class="empty">No messages.</div>'}</div>
     ${can ? `<div class="composer"><textarea id="body" placeholder="${t.status === 'awaiting_human' ? 'Type just \'ok\' or \'non\' to decide — anything longer is a plain comment.' : 'Write as human — everyone in the project will see it. @name to notify.'}"></textarea>
       ${t.status === 'awaiting_human' ? '<div class="hint">This thread waits on you: a one-word \'ok\' / \'non\' decides it; a longer message stays a comment.</div>' : ''}
       <div class="actions"><button id="send" class="on">Post</button>
@@ -286,7 +364,7 @@ async function openThread(id) {
   if (!same || wasAtBottom) art.scrollTop = art.scrollHeight; else art.scrollTop = prevTop;
   if (draft && $('#body')) { $('#body').value = draft; if (hadFocus) { $('#body').focus(); $('#body').setSelectionRange(draft.length, draft.length); } }
   updateHash();
-  loadThreads();
+  loadProjects();
   if (!can) return;
   const post = async (verdict) => {
     const body = $('#body').value.trim() || (verdict ? verdict.replace('_', ' ') : '');
@@ -314,7 +392,7 @@ window.addEventListener('hashchange', async () => {   // back / forward buttons
   const p = S.projects.find(x => x.name === h.project); if (!p) return;
   applyingHash = true;
   if (p.id !== S.project) { S.project = p.id; try { localStorage.setItem('board_project', p.id); } catch {} await loadProjects(); }
-  if (h.thread && h.thread !== S.thread) await openThread(h.thread); else if (!h.thread) { S.thread = null; $('#thread').innerHTML = '<div class="empty">Pick a thread.</div>'; }
+  if (h.thread && h.thread !== S.thread) await openThread(h.thread); else if (!h.thread) { S.thread = null; await showActivity(); }
   applyingHash = false;
 });
 $('#copyLink').onclick = async (e) => {
@@ -374,10 +452,11 @@ function connect() {
       const reload = touched; touched = false;
       await loadProjects();
       if (reload && S.thread) await openThread(S.thread);
+      else if (!S.thread) await showActivity();
     }, 200);
   });
 }
-loadProjects().then(connect);
+loadProjects().then(async () => { if (!S.thread) await showActivity(); connect(); });
 </script>
 </body>
 </html>
