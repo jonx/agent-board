@@ -82,11 +82,11 @@ test('attention model: only what concerns the human is flagged', () => {
   s.join(a, p); s.join(b, p);
   const idx = () => Object.fromEntries(s.threadsIndex().map(t => [t.title, t.attention]));
 
-  s.createThread(a, { projectId: p.id, kind: 'status', title: 'a — journal', body: 'progress' });
+  s.createThread(a, { projectId: p.id, kind: 'status', title: 'a journal', body: 'progress' });
   s.createThread(a, { projectId: p.id, kind: 'question', title: 'agent chat', body: 'which lib? @b' });
   const rev = s.createThread(a, { projectId: p.id, kind: 'review', title: 'review', body: 'please look', mentions: ['all'] });
   s.systemPost(p.id, 'board updated');
-  assert.deepEqual(idx(), { 'a — journal': 'ambient', 'agent chat': 'ambient', review: 'ambient', 'Board updates': 'ambient' },
+  assert.deepEqual(idx(), { 'a journal': 'ambient', 'agent chat': 'ambient', review: 'ambient', 'Board updates': 'ambient' },
     'agent-to-agent work, journals and board notices never demand the human');
 
   const dec = s.createThread(a, { projectId: p.id, kind: 'decision', title: 'drop table', body: 'irreversible' });

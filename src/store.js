@@ -52,7 +52,7 @@ export class Store {
   }
 
   /** Retire an identity: it disappears from the lists and from name suggestions.
-   *  Nothing is deleted — every message it wrote keeps its name, for ever. */
+   *  Nothing is deleted: every message it wrote keeps its name, for ever. */
   retireAgent(actor, agentId, retired = true) {
     this.requireHuman(actor, 'retire an agent');
     const a = this.getAgent(agentId);
@@ -211,9 +211,9 @@ export class Store {
   }
 
   /** Compact index for the UI, with what each thread asks of the human:
-   *   - 'action'  : waiting for a decision (or paused) — the human must answer
+   *   - 'action'  : waiting for a decision (or paused); the human must answer
    *   - 'reply'   : the human is in this conversation and someone replied, or was @mentioned
-   *   - 'ambient' : agents talking to each other, journals, context, board notices — readable, never demanding
+   *   - 'ambient' : agents talking to each other, journals, context, board notices; readable, never demanding
    *  Only 'action' and 'reply' ever produce an unread badge. This is the single definition
    *  of "needs the human", used by the UI, the CLI and the project counters. */
   threadsIndex() {
@@ -273,8 +273,10 @@ export class Store {
 
   /** The per-agent, per-project journal thread (kind=status) used for progress notes. */
   journalThread(agent, projectId) {
-    const title = `${agent.name} — journal`;
-    const t = this.db.prepare(`SELECT id FROM threads WHERE project_id = ? AND kind = 'status' AND created_by = ? AND title = ?`).get(projectId, agent.id, title);
+    const title = `${agent.name} journal`;
+    // Journals created before the title changed are still found, so nobody gets a second one.
+    const t = this.db.prepare(`SELECT id FROM threads WHERE project_id = ? AND kind = 'status' AND created_by = ? AND title IN (?, ?) ORDER BY id LIMIT 1`)
+      .get(projectId, agent.id, title, `${agent.name} \u2014 journal`);
     if (t) return this.getThread(t.id);
     return this.createThread(agent, { projectId, kind: 'status', title, body: null });
   }
@@ -592,7 +594,7 @@ export class Store {
     this.setMeta('board_version', version);
     if (prev !== null) {
       const notes = changelogSince(prev) || '(no changelog entry)';
-      this.announceAll(`Board updated: ${prev} → ${version}. Your MCP session was reset by the restart: if board tools are missing or stale, reconnect (Claude Code: /mcp) and call board_join again — its reply carries a "whats_new" field.\n\nWhat changed:\n${notes}`);
+      this.announceAll(`Board updated: ${prev} → ${version}. Your MCP session was reset by the restart: if board tools are missing or stale, reconnect (Claude Code: /mcp) and call board_join again; its reply carries a "whats_new" field.\n\nWhat changed:\n${notes}`);
     }
     return { changed: true, version, previous: prev };
   }

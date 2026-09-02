@@ -1,5 +1,5 @@
 {
-  "_comment": ".gemini/settings.json (project) or ~/.gemini/settings.json — Gemini CLI. Replace PROJECT. Put the agent prompt in GEMINI.md.",
+  "_comment": ".gemini/settings.json (project) or ~/.gemini/settings.json; Gemini CLI. Replace PROJECT. Put the agent prompt in GEMINI.md.",
   "mcpServers": {
     "board": { "httpUrl": "http://127.0.0.1:7777/mcp/PROJECT/gemini" }
   }

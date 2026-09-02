@@ -1,7 +1,7 @@
 // MCP surface for agents. One server instance per MCP session (stateful Streamable
 // HTTP). The URL fixes the project and the provider (/mcp/<project>/<provider>); the
 // session picks its own agent name with board_join, so several sessions of the same
-// provider can work side by side as distinct agents — no environment variables.
+// provider can work side by side as distinct agents: no environment variables.
 // Every tool here acts *as an agent*: nothing on this surface can approve a gated
 // decision, pause anyone, or touch the human account (test/invariants.test.js checks the names).
 
@@ -20,14 +20,14 @@ export const TOOL_NAMES = [
 export const CONTEXT_THREAD_TITLE = 'Project context';
 
 const PROTOCOL = [
-  'THE BOARD IS ASYNCHRONOUS, LIKE A MAILBOX. You post; the others read it whenever they next work. Never wait for another agent, never ask whether they are connected — it is irrelevant and you cannot know. Post, then get on with something else.',
+  'THE BOARD IS ASYNCHRONOUS, LIKE A MAILBOX. You post; the others read it whenever they next work. Never wait for another agent, never ask whether they are connected: it is irrelevant and you cannot know. Post, then get on with something else.',
   'You share this board with other agents (possibly other providers) and with the human, who reads everything.',
   '1. Start: board_join (pick your name), board_status, then board_inbox. Deal with what is on your plate (waiting_on_you) before starting anything new. If "Project context" is empty or stale, write it with board_context.',
   '2. While working: board_claim the paths you edit; board_journal at each milestone (what you did, what is next, what is uncertain).',
   '3. Settle questions between agents; escalate to the human (board_ask critical=true) only for genuinely irreversible choices, formatted so they can answer "ok".',
-  '4. Asked something you cannot answer right away? board_ack "working" (or "declined"), then answer when you get to it. Asked something you CAN answer? Answer now — an unanswered question stalls someone else.',
-  '5. When a step is done: board_request_review; act on verdicts. Post the request and carry on with other work — do not sit on it.',
-  '6. Blocked on someone else\'s answer: mark the task blocked (board_task), say so in board_journal, and switch to other work. If there is nothing else, write a handoff journal and end your turn — do not idle, do not re-ask, do not ping.',
+  '4. Asked something you cannot answer right away? board_ack "working" (or "declined"), then answer when you get to it. Asked something you CAN answer? Answer now: an unanswered question stalls someone else.',
+  '5. When a step is done: board_request_review; act on verdicts. Post the request and carry on with other work: do not sit on it.',
+  '6. Blocked on someone else\'s answer: mark the task blocked (board_task), say so in board_journal, and switch to other work. If there is nothing else, write a handoff journal and end your turn: do not idle, do not re-ask, do not ping.',
   '7. Before finishing: board_journal a handoff note, board_release your claims, update board_context if the picture changed.',
   'Everything you post is public to the whole project. There are no private messages.',
 ];
@@ -60,7 +60,7 @@ export function buildMcpServer(store, ctx) {
     store.join(agent, store.getProject(pid));
     if (ctx.sessionId) ctx.registry.bind(ctx.sessionId, agent.name);
     ctx.agent = agent;
-    if (auto) pendingNote = `You are acting as "${agent.name}" (default identity for this connection — no board_join needed). If you work under another name, call board_join with it; a name in the connection URL (/mcp/<project>/<provider>/<name>) makes it permanent and reconnect-proof.`;
+    if (auto) pendingNote = `You are acting as "${agent.name}" (default identity for this connection: no board_join needed). If you work under another name, call board_join with it; a name in the connection URL (/mcp/<project>/<provider>/<name>) makes it permanent and reconnect-proof.`;
     return agent;
   };
   const needAgent = () => agent ?? bind(ctx.forcedName ?? ctx.provider, { auto: true });
@@ -103,7 +103,7 @@ export function buildMcpServer(store, ctx) {
     () => ({ this_connection: project.name, projects: projectList() }), { open: true });
 
   reg('board_join',
-    `Optional: pick the name you are known by on this project. You do NOT need it to use the board — an unjoined session acts as "${ctx.forcedName ?? ctx.provider}" automatically, and a name in the connection URL (/mcp/<project>/<provider>/<name>) survives every reconnect. Call it when you want a different name, or to get the board's "what's new" notes. Choose the agent name you will be known by on this project (lowercase, e.g. "${ctx.provider}", "${ctx.provider}-2", "${ctx.provider}-auth"). Your provider is fixed by the connection (${ctx.provider}). Reusing your previous name always works and gives you back your journal, claims and inbox — names are never locked, so a restart or a dropped connection can never keep you out of your own identity. You only get a note if another session used the name moments ago.`,
+    `Optional: pick the name you are known by on this project. You do NOT need it to use the board: an unjoined session acts as "${ctx.forcedName ?? ctx.provider}" automatically, and a name in the connection URL (/mcp/<project>/<provider>/<name>) survives every reconnect. Call it when you want a different name, or to get the board's "what's new" notes. Choose the agent name you will be known by on this project (lowercase, e.g. "${ctx.provider}", "${ctx.provider}-2", "${ctx.provider}-auth"). Your provider is fixed by the connection (${ctx.provider}). Reusing your previous name always works and gives you back your journal, claims and inbox: names are never locked, so a restart or a dropped connection can never keep you out of your own identity. You only get a note if another session used the name moments ago.`,
     { name: z.string().min(1).max(40).describe('your agent name for this session'), project_path: z.string().optional().describe('absolute path of the project root, registers it if unknown') },
     ({ name, project_path }) => {
       name = String(name).trim().toLowerCase();
@@ -118,11 +118,11 @@ export function buildMcpServer(store, ctx) {
       const holder = ctx.registry.holder(name), heldFor = ctx.registry.secondsSince(name);
       bind(name);
       if (holder && holder !== ctx.sessionId) {
-        warnings.push(`NOTE: another session used the name "${name}" ${heldFor}s ago. If that was you (a reconnect after a restart or a dropped connection), ignore this — you have your identity, journal and claims back. If another agent of the same provider is genuinely running right now, one of you should re-join as "${suggestName()}" to avoid sharing an inbox.`);
+        warnings.push(`NOTE: another session used the name "${name}" ${heldFor}s ago. If that was you (a reconnect after a restart or a dropped connection), ignore this: you have your identity, journal and claims back. If another agent of the same provider is genuinely running right now, one of you should re-join as "${suggestName()}" to avoid sharing an inbox.`);
       }
       if (project_path) {
         const other = store.listProjects().find(p => p.id !== pid && p.path && samePath(p.path, project_path));
-        if (other) warnings.push(`WARNING: the path ${project_path} is already registered as project "${other.name}". You are connected to "${project.name}" — probably a naming mismatch. Do not work in two projects for one repo: tell the human, or reconnect to "${other.name}".`);
+        if (other) warnings.push(`WARNING: the path ${project_path} is already registered as project "${other.name}". You are connected to "${project.name}": probably a naming mismatch. Do not work in two projects for one repo: tell the human, or reconnect to "${other.name}".`);
         else store.ensureProject(project.name, project_path, agent);
       }
       let fresh = store.getProject(pid);
@@ -134,7 +134,7 @@ export function buildMcpServer(store, ctx) {
     }, { open: true });
 
   reg('board_status',
-    `Your entry point (no board_join needed — an unjoined session acts as "${ctx.forcedName ?? ctx.provider}"). Returns the project brief (latest "Project context"), who is on the project, recent journal entries, active path claims, tasks in progress, what other agents are waiting on from YOU (waiting_on_you), the asks of yours nobody has answered yet, and your unread count. Before joining it only tells you how to join.`,
+    `Your entry point (no board_join needed: an unjoined session acts as "${ctx.forcedName ?? ctx.provider}"). Returns the project brief (latest "Project context"), who is on the project, recent journal entries, active path claims, tasks in progress, what other agents are waiting on from YOU (waiting_on_you), the asks of yours nobody has answered yet, and your unread count. Before joining it only tells you how to join.`,
     { project_path: z.string().optional().describe('Absolute path of the project root, to register it if unknown') },
     ({ project_path }) => {
       if (project_path) store.ensureProject(project.name, project_path, agent);
@@ -145,7 +145,7 @@ export function buildMcpServer(store, ctx) {
         board_version: VERSION,
         project: { id: p.id, name: p.name, path: p.path },
         protocol: PROTOCOL,
-        project_context: brief ?? 'EMPTY — you are probably the first agent here. Write a brief with board_context (goal, stack, layout, conventions, current state) so the next agent can start without re-discovering everything.',
+        project_context: brief ?? 'EMPTY: you are probably the first agent here. Write a brief with board_context (goal, stack, layout, conventions, current state) so the next agent can start without re-discovering everything.',
         members: store.members(pid).map(m => ({ name: m.name, role: m.role, provider: m.provider, paused: !!m.paused_reason })),
         waiting_on_you: store.waitingOnAgent(agent, pid),
         your_unanswered_asks: store.unansweredAsks(agent, pid),
@@ -158,7 +158,7 @@ export function buildMcpServer(store, ctx) {
     });
 
   reg('board_inbox',
-    'Unread messages in this project (from every agent and the human), grouped by thread. Marks them read unless peek=true. Messages from the human and threads mentioning you come first. Call it between work steps — it is how the board reaches you; there is no push and nothing to wait for.',
+    'Unread messages in this project (from every agent and the human), grouped by thread. Marks them read unless peek=true. Messages from the human and threads mentioning you come first. Call it between work steps: it is how the board reaches you; there is no push and nothing to wait for.',
     { peek: z.boolean().optional(), limit: z.number().int().min(1).max(500).optional() },
     ({ peek = false, limit = 100 }) => {
       const r = store.inbox(agent, pid, { peek, limit });
@@ -183,7 +183,7 @@ export function buildMcpServer(store, ctx) {
     });
 
   reg('board_post',
-    `Reply in a thread. Mention agents with @name in the body. On a review thread, set verdict to decide it (approve / request_changes / reject). On a human-gated thread (decision, board-change) your verdict is recorded as advice only — the human decides.`,
+    `Reply in a thread. Mention agents with @name in the body. On a review thread, set verdict to decide it (approve / request_changes / reject). On a human-gated thread (decision, board-change) your verdict is recorded as advice only: the human decides.`,
     { thread_id: z.number().int(), body: z.string().min(1), verdict: z.enum(VERDICTS).optional(), mention: z.array(z.string()).optional().describe('agent names to notify, in addition to @mentions in the body') },
     ({ thread_id, body, verdict, mention = [] }) => {
       const t = store.getThread(thread_id);
@@ -201,15 +201,15 @@ export function buildMcpServer(store, ctx) {
     });
 
   reg('board_ask',
-    `Ask the other agents. Default use: settle a question between yourselves (use to=[...] for specific agents) — the human reads the board but is not there to arbitrate routine work. Set critical=true ONLY for choices that are genuinely hard to undo or outside your mandate (destroying/migrating data, security or auth model, spending money, sending anything outside this machine, product direction, changing the board itself): the thread then waits for the human's explicit approval and you must not proceed until board_read shows status "approved". A critical ask must be answerable in five seconds — one-sentence decision, then "Recommendation:", "If yes:", "If no:", "Why it needs you:" — so the human can reply "ok".`,
+    `Ask the other agents. Default use: settle a question between yourselves (use to=[...] for specific agents); the human reads the board but is not there to arbitrate routine work. Set critical=true ONLY for choices that are genuinely hard to undo or outside your mandate (destroying/migrating data, security or auth model, spending money, sending anything outside this machine, product direction, changing the board itself): the thread then waits for the human's explicit approval and you must not proceed until board_read shows status "approved". A critical ask must be answerable in five seconds: one-sentence decision, then "Recommendation:", "If yes:", "If no:", "Why it needs you:"; so the human can reply "ok".`,
     { title: z.string().min(1), body: z.string().min(1).describe('context, options considered, your recommendation'), critical: z.boolean().optional(), to: z.array(z.string()).optional() },
     ({ title, body, critical = false, to = [] }) => {
       const t = store.createThread(agent, { projectId: pid, kind: critical ? 'decision' : 'question', title, body, mentions: to });
-      return { ...summary(t), next: critical ? 'Do not proceed and do not idle: mark the affected task blocked, journal why, and switch to other work (or end your turn with a handoff note). Check the status on your next board_inbox; proceed only when it shows approved.' : 'Posted. Now go and do something else — the others will read it when they next work; nobody is necessarily at a keyboard. Check back on your next board_inbox; board_read shows any acks and who has read it.' };
+      return { ...summary(t), next: critical ? 'Do not proceed and do not idle: mark the affected task blocked, journal why, and switch to other work (or end your turn with a handoff note). Check the status on your next board_inbox; proceed only when it shows approved.' : 'Posted. Now go and do something else: the others will read it when they next work; nobody is necessarily at a keyboard. Check back on your next board_inbox; board_read shows any acks and who has read it.' };
     });
 
   reg('board_request_review',
-    'Ask for a review of finished work (a commit, branch, PR, diff or set of files). Give the reviewer what they need: what changed, why, how to verify. Post it and move on to other work — the review arrives whenever the reviewer next reads the board; do not wait on it and do not chase it.',
+    'Ask for a review of finished work (a commit, branch, PR, diff or set of files). Give the reviewer what they need: what changed, why, how to verify. Post it and move on to other work: the review arrives whenever the reviewer next reads the board; do not wait on it and do not chase it.',
     { title: z.string().min(1), ref: z.string().min(1).describe('commit sha, branch, PR URL, or path list'), body: z.string().min(1), reviewer: z.string().optional().describe('agent name; omit to let anyone review') },
     ({ title, ref, body, reviewer }) => summary(store.createThread(agent, { projectId: pid, kind: 'review', title, body, ref, mentions: reviewer ? [reviewer] : ['all'] })));
 

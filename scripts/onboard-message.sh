@@ -10,5 +10,5 @@ sed -n '/^---$/,$p' "$ROOT/docs/ONBOARD_EXISTING.md" | tail -n +2 \
 if command -v pbcopy >/dev/null 2>&1; then
   sed -n '/^---$/,$p' "$ROOT/docs/ONBOARD_EXISTING.md" | tail -n +2 \
     | sed -e "s#{PROJECT}#$1#g" -e "s#{PROVIDER}#$provider#g" | pbcopy
-  echo; echo "(copied to the clipboard — paste it into the agent's chat)" >&2
+  echo; echo "(copied to the clipboard: paste it into the agent's chat)" >&2
 fi

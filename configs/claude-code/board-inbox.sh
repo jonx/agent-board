@@ -1,7 +1,7 @@
 #!/bin/sh
 # Claude Code hook (SessionStart / UserPromptSubmit). Tells the agent what was posted on the
 # board for PROJECT since *this Claude session* last looked (cursor keyed by the hook's
-# session_id, read from stdin JSON) — no agent name or environment variable needed.
+# session_id, read from stdin JSON): no agent name or environment variable needed.
 # If the board server is down, starts it (better: `board service install`).
 # Installed by `board init`; usage: board-inbox.sh PROJECT
 PROJECT="$1"
@@ -25,7 +25,7 @@ if [ "$code" != "200" ]; then
     nohup node "$BOARD_ROOT/bin/board.js" serve --port "$port" >/dev/null 2>&1 &
     echo "[board] the board server was not running; started it in the background. If the 'board' MCP tools are unavailable, run /mcp to reconnect. (Install it permanently with: board service install)"
   else
-    echo "[board] board server not reachable at $BOARD_URL — start it with \`board serve\`."
+    echo "[board] board server not reachable at $BOARD_URL: start it with \`board serve\`."
   fi
   exit 0
 fi
@@ -37,5 +37,5 @@ if [ "$since" = "0" ]; then
   exit 0
 fi
 [ "$count" = "0" ] && exit 0
-echo "[board] $count new message(s) on project '$PROJECT' since you last looked — call board_inbox before continuing. Preview:"
+echo "[board] $count new message(s) on project '$PROJECT' since you last looked: call board_inbox before continuing. Preview:"
 printf '%s' "$out" | head -c 3000; echo

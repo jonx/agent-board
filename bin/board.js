@@ -19,7 +19,7 @@ function token() {
 }
 async function api(path, body) {
   const r = await fetch(BASE + path, body ? { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${token()}` }, body: JSON.stringify(body) } : {}).catch(() => null);
-  if (!r) { console.error(`cannot reach ${BASE} — run \`board serve\` first`); process.exit(1); }
+  if (!r) { console.error(`cannot reach ${BASE}: run \`board serve\` first`); process.exit(1); }
   const data = await r.json();
   if (!r.ok) { console.error(data.message ?? data.error); process.exit(1); }
   return data;
@@ -45,14 +45,14 @@ switch (cmd) {
 
   case 'threads': {
     const p = await project(pos[0]);
-    for (const t of await api(`/api/projects/${p.id}/threads?status=${opt('--status', 'active')}`)) console.log(`#${t.id}\t[${t.kind}]\t${t.status}${t.needs_human ? ' (human)' : ''}\t${t.title}\t— ${t.created_by_name}, ${t.message_count} msg`);
+    for (const t of await api(`/api/projects/${p.id}/threads?status=${opt('--status', 'active')}`)) console.log(`#${t.id}\t[${t.kind}]\t${t.status}${t.needs_human ? ' (human)' : ''}\t${t.title}\tby ${t.created_by_name}, ${t.message_count} msg`);
     break;
   }
 
   case 'read': {
     const { thread, messages } = await api(`/api/threads/${pos[0]}`);
     if (token()) await api(`/api/threads/${pos[0]}/read`, {}).catch(() => {});
-    console.log(`#${thread.id} [${thread.kind}] ${thread.title} — ${thread.status}${thread.ref ? ` (ref ${thread.ref})` : ''}\n`);
+    console.log(`#${thread.id} [${thread.kind}] ${thread.title}: ${thread.status}${thread.ref ? ` (ref ${thread.ref})` : ''}\n`);
     for (const m of messages) console.log(`${ts(m.created_at)} ${m.author_role === 'human' ? '👤' : '🤖'} ${m.author}${m.verdict ? ` [${m.verdict}]` : ''}:\n${m.body}\n`);
     break;
   }
@@ -62,7 +62,7 @@ switch (cmd) {
     if (!items.length) { console.log(rest.includes('--all') ? 'nothing needs you.' : 'nothing new needs you. (board todo --all to include what you already looked at)'); break; }
     for (const i of items) {
       const head = i.attention === 'action' ? (i.paused ? 'PAUSED ' : 'DECIDE ') : 'REPLY  ';
-      console.log(`${head} #${i.thread_id}  [${i.project}] ${i.title}${i.asked_by ? `  — ${i.asked_by}` : ''}`);
+      console.log(`${head} #${i.thread_id}  [${i.project}] ${i.title}${i.asked_by ? `  by ${i.asked_by}` : ''}`);
       const q = (i.attention === 'action' ? i.question : i.last?.body) ?? '';
       for (const line of q.split('\n').slice(0, 4)) console.log(`         ${line}`);
       if (i.attention === 'action' && i.status === 'awaiting_human') console.log(`         → board ok ${i.thread_id}   |   board no ${i.thread_id} "reason"`);
@@ -71,7 +71,7 @@ switch (cmd) {
     break;
   }
 
-  case 'ok': case 'no': { // board ok <thread> ["note"] — decide in one word
+  case 'ok': case 'no': { // board ok <thread> ["note"]; decide in one word
     if (!pos[0]) usage();
     const note = pos.slice(1).join(' ') || (cmd === 'ok' ? 'ok' : 'non');
     const r = await api(`/api/threads/${pos[0]}/messages`, { body: note, verdict: cmd === 'ok' ? 'approve' : 'reject' });
@@ -116,7 +116,7 @@ switch (cmd) {
     break;
   }
 
-  case 'announce': { // board announce "text" — system message in every project
+  case 'announce': { // board announce "text"; system message in every project
     const r = await api('/api/announce', { body: pos.join(' ') });
     console.log(`announced in ${r.length} project(s): ${r.map(x => x.project).join(', ')}`);
     break;
@@ -131,11 +131,11 @@ switch (cmd) {
     const registered = known.find(p => p.path && p.path.replace(/\/+$/, '') === dir.replace(/\/+$/, ''));
     if (!name) {
       name = registered ? registered.name : dir.split('/').filter(Boolean).pop().toLowerCase().replace(/[^a-z0-9._-]/g, '-');
-      if (registered) console.log(`this directory is already registered on the board as project "${name}" — reusing it`);
+      if (registered) console.log(`this directory is already registered on the board as project "${name}": reusing it`);
     } else if (registered && registered.name !== name) {
       console.log(`WARNING: this directory is already registered as project "${registered.name}", but you asked for "${name}". Two projects for one repo is confusing; Ctrl-C now if that was not intended.`);
     }
-    if (!registered && known.length) console.log(`existing projects: ${known.map(p => p.name).join(', ')} — creating/using "${name}"`);
+    if (!registered && known.length) console.log(`existing projects: ${known.map(p => p.name).join(', ')}; creating/using "${name}"`);
     const agents = opt('--agents', 'claude').split(',').map(s => s.trim()).filter(Boolean);
     const url = (a) => `${BASE}/mcp/${name}/${a}`;
     const promptFor = (a) => readFileSync(join(ROOT, 'docs', 'AGENT_PROMPT.md'), 'utf8').replaceAll('{PROJECT}', name).replaceAll('{PROVIDER}', a).replaceAll('{BOARD_URL}', BASE);
@@ -207,7 +207,7 @@ ${prompt}`);
     break;
   }
 
-  case 'as': { // board as <project> <name> <tool> [json-args] [--provider p] — act as an agent without MCP config
+  case 'as': { // board as <project> <name> <tool> [json-args] [--provider p]; act as an agent without MCP config
     const [project, name, tool, jsonArgs] = pos;
     if (!project || !name || !tool) usage();
     const provider = opt('--provider', name.split('-')[0]);
@@ -216,7 +216,7 @@ ${prompt}`);
       if (!known.some(p => p.name === project)) {
         const cwd = process.cwd().replace(/\/+$/, '');
         const byPath = known.find(p => p.path && (cwd === p.path.replace(/\/+$/, '') || cwd.startsWith(p.path.replace(/\/+$/, '') + '/')));
-        console.error(`project "${project}" does not exist on the board.` + (byPath ? ` The current directory is registered as project "${byPath.name}" — use that name.` : ''));
+        console.error(`project "${project}" does not exist on the board.` + (byPath ? ` The current directory is registered as project "${byPath.name}": use that name.` : ''));
         console.error(`existing projects:\n` + (known.map(p => `  ${p.name}\t${p.path ?? ''}`).join('\n') || '  (none)'));
         console.error(`to really create a new project named "${project}", add --create`);
         process.exit(1);
@@ -228,7 +228,7 @@ ${prompt}`);
     const { StreamableHTTPClientTransport } = await import('@modelcontextprotocol/sdk/client/streamableHttp.js');
     const transport = new StreamableHTTPClientTransport(new URL(`${BASE}/mcp/${project}/${provider}`));
     const client = new Client({ name: 'board-cli', version: '0' });
-    try { await client.connect(transport); } catch (e) { console.error(`cannot reach ${BASE} — run scripts/start.sh`); process.exit(1); }
+    try { await client.connect(transport); } catch (e) { console.error(`cannot reach ${BASE}: run scripts/start.sh`); process.exit(1); }
     const call = async (t, a) => { const r = await client.callTool({ name: t, arguments: a }); return { error: !!r.isError, text: r.content?.[0]?.text ?? '' }; };
     let out = await call('board_join', { name, ...(tool === 'board_join' ? args : {}) });
     if (!out.error && tool !== 'board_join') out = await call(tool, args);
@@ -237,7 +237,7 @@ ${prompt}`);
     process.exit(out.error ? 1 : 0);
   }
 
-  case 'service': { // board service install|uninstall|status — keep the board always running
+  case 'service': { // board service install|uninstall|status; keep the board always running
     const sub = pos[0] ?? 'status';
     const node = process.execPath, log = join(DEFAULT_DATA_DIR, 'server.log');
     const reachable = await fetch(BASE + '/api/projects').then(r => r.ok).catch(() => false);
@@ -266,13 +266,13 @@ ${prompt}`);
         if (reachable) console.log(`note: something already serves ${BASE} (your manual \`board serve\`?). Stop it; the service will take over within seconds.`);
         try { execSync(`launchctl bootout gui/${uid}/${label}`, { stdio: 'ignore' }); } catch {}
         execSync(`launchctl bootstrap gui/${uid} "${plist}"`, { stdio: 'inherit' });
-        console.log(`installed ${plist} — starts at login, restarts if it dies, logs in ${log}`);
+        console.log(`installed ${plist}: starts at login, restarts if it dies, logs in ${log}`);
       } else if (sub === 'uninstall') {
         try { execSync(`launchctl bootout gui/${uid}/${label}`, { stdio: 'ignore' }); } catch {}
         try { execSync(`rm -f "${plist}"`); } catch {}
         console.log('service removed');
       } else if (sub === 'restart') {
-        if (!existsSync(plist)) { console.log('service not installed — run: board service install'); process.exit(1); }
+        if (!existsSync(plist)) { console.log('service not installed: run: board service install'); process.exit(1); }
         execSync(`launchctl kickstart -k gui/${uid}/${label}`, { stdio: 'inherit' });
         console.log('service restarted');
       } else usage();
@@ -301,7 +301,7 @@ async function project(nameOrId) {
   return p;
 }
 function usage() {
-  console.log(`board — shared, human-supervised board for coding agents
+  console.log(`board: shared, human-supervised board for coding agents
 
 Everyday:
   scripts/todo.sh          only what needs you        scripts/watch.sh   live feed

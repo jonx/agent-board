@@ -8,7 +8,7 @@ $BOARD init "$dir" --agents "$agents" || exit 1
 cat <<TXT
 
 Next:
-  cd "$dir" && claude        # Claude Code asks once to trust .mcp.json — say yes
+  cd "$dir" && claude        # Claude Code asks once to trust .mcp.json: say yes
   The agent will do board_join / board_status / board_inbox by itself.
   Watch it from another terminal: $(dirname "$0")/watch.sh
 TXT

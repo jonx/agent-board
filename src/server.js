@@ -36,7 +36,7 @@ export function startServer({ port = DEFAULT_PORT, host = '127.0.0.1', dataDir =
   const server = createHttpServer({ store, humanToken, uiFile });
   server.on('error', (e) => {
     if (e.code !== 'EADDRINUSE') throw e;
-    console.error(`port ${port} is already in use — the board is probably already running (\`board service status\`, \`board open\`).\nTo run a second instance: board serve --port <other>. To stop the service: board service uninstall.`);
+    console.error(`port ${port} is already in use: the board is probably already running (\`board service status\`, \`board open\`).\nTo run a second instance: board serve --port <other>. To stop the service: board service uninstall.`);
     process.exit(1);
   });
   return new Promise(resolve => server.listen(port, host, () => {

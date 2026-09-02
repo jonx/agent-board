@@ -42,7 +42,7 @@ test('two providers coordinate through the board with the human watching', async
   assert.equal((await anon.call('board_status')).you.name, 'claude-2');
   await anon.c.close();
 
-  // A second live session may always take a name in use — it is a label, not a lock — but is told.
+  // A second live session may always take a name in use (it is a label, not a lock) but is told.
   const rival = await agent('demo', null, 'claude');
   const takeover = await rival.call('board_join', { name: 'claude' });
   assert.equal(takeover.joined, true);
