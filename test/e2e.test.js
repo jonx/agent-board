@@ -30,17 +30,24 @@ test('two providers coordinate through the board with the human watching', async
 
   // Sessions pick their own names; a live name cannot be taken, a foreign provider's name neither.
   const anon = await agent('demo', null, 'claude');
-  const pre = await anon.call('board_status');
-  assert.equal(pre.joined, false); assert.match(pre.how, /claude-2/);
-  await assert.rejects(anon.call('board_inbox'), /board_join first/);
-  const takeover = await anon.call('board_join', { name: 'claude' });   // never locked out of a name
-  assert.equal(takeover.joined, true);
-  assert.match(takeover.warnings.join(' '), /another session used the name/);
+  // A session may look around before claiming any identity...
+  assert.ok((await anon.call('board_projects')).projects.some(p => p.name === 'demo'));
+  // ...and identity is never a precondition: an unjoined session simply acts as its provider.
+  const auto = await anon.call('board_inbox');
+  assert.match(auto.note, /acting as "claude"/);
+  assert.equal((await anon.call('board_status')).you.name, 'claude');
   await assert.rejects(anon.call('board_join', { name: 'codex' }), /belongs to provider codex/);
   await assert.rejects(anon.call('board_join', { name: 'human' }), /human account/);
   await anon.call('board_join', { name: 'claude-2' });
   assert.equal((await anon.call('board_status')).you.name, 'claude-2');
   await anon.c.close();
+
+  // A second live session may always take a name in use — it is a label, not a lock — but is told.
+  const rival = await agent('demo', null, 'claude');
+  const takeover = await rival.call('board_join', { name: 'claude' });
+  assert.equal(takeover.joined, true);
+  assert.match((takeover.warnings ?? []).join(' '), /another session used the name/);
+  await rival.c.close();
 
 
   // First agent alone: brief is empty, it writes context + journal.
@@ -115,6 +122,16 @@ test('two providers coordinate through the board with the human watching', async
   assert.equal((await fetch(`${base}/api/threads/${q.id}`)).status, 200);
   // Nobody can register as the human over MCP.
   await assert.rejects(agent('demo', 'human', 'claude'), /human account/);
+
+  // An identity pinned in the URL needs no board_join and survives any reconnect.
+  const pinned = async () => { const c = new Client({ name: 'p', version: '0' }); await c.connect(new StreamableHTTPClientTransport(new URL(`${base}/mcp/demo/claude/claude-auth`))); return c; };
+  let pc = await pinned();
+  const first = JSON.parse((await pc.callTool({ name: 'board_journal', arguments: { body: 'pinned identity, no join' } })).content[0].text);
+  assert.match(first.note, /acting as "claude-auth"/);
+  await pc.close();
+  pc = await pinned();   // brand new session, as if the transport had reconnected
+  assert.equal(JSON.parse((await pc.callTool({ name: 'board_status', arguments: {} })).content[0].text).you.name, 'claude-auth');
+  await pc.close();
 
   // Multi-project isolation + log integrity + UI served.
   const other = await agent('other', 'gemini');

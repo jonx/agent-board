@@ -50,9 +50,28 @@ export function buildMcpServer(store, ctx) {
   const server = new McpServer({ name: 'agent-board', version: VERSION });
   const project = ctx.project, pid = project.id;
   let agent = ctx.agent ?? null;
-  const needAgent = () => { if (!agent) throw new BoardError('not_joined', 'call board_join first: choose your agent name for this session'); return agent; };
+  let pendingNote = null;
+
+  // Identity must never be a precondition: a harness whose MCP session does not survive
+  // between batches of calls would otherwise fail on every tool. An unjoined session simply
+  // acts under the name in the URL, or the provider name. board_join only changes the label.
+  const bind = (name, { auto = false } = {}) => {
+    agent = store.ensureAgent(name, ctx.provider);
+    store.join(agent, store.getProject(pid));
+    if (ctx.sessionId) ctx.registry.bind(ctx.sessionId, agent.name);
+    ctx.agent = agent;
+    if (auto) pendingNote = `You are acting as "${agent.name}" (default identity for this connection — no board_join needed). If you work under another name, call board_join with it; a name in the connection URL (/mcp/<project>/<provider>/<name>) makes it permanent and reconnect-proof.`;
+    return agent;
+  };
+  const needAgent = () => agent ?? bind(ctx.forcedName ?? ctx.provider, { auto: true });
+
   const reg = (name, description, inputSchema, fn, { open = false } = {}) =>
-    server.registerTool(name, { description, inputSchema }, wrap((args) => { if (!open) needAgent(); return fn(args); }));
+    server.registerTool(name, { description, inputSchema }, wrap((args) => {
+      if (!open) needAgent();
+      const out = fn(args);
+      const attach = (v) => { if (pendingNote && v && typeof v === 'object' && !Array.isArray(v)) { v = { ...v, note: pendingNote }; pendingNote = null; } return v; };
+      return out instanceof Promise ? out.then(attach) : attach(out);
+    }));
   const summary = (t) => {
     const acks = store.threadAcks(t.id);
     return { id: t.id, kind: t.kind, title: t.title, status: t.status, needs_human: !!t.needs_human, paused: t.paused_reason ?? null, by: t.created_by_name, ref: t.ref ?? undefined, messages: t.message_count, updated_at: t.updated_at,
@@ -84,32 +103,30 @@ export function buildMcpServer(store, ctx) {
     () => ({ this_connection: project.name, projects: projectList() }), { open: true });
 
   reg('board_join',
-    `First call of every session, and after any reconnect. Choose the agent name you will be known by on this project (lowercase, e.g. "${ctx.provider}", "${ctx.provider}-2", "${ctx.provider}-auth"). Your provider is fixed by the connection (${ctx.provider}). Reusing your previous name always works and gives you back your journal, claims and inbox — names are never locked, so a restart or a dropped connection can never keep you out of your own identity. You only get a note if another session used the name moments ago.`,
+    `Optional: pick the name you are known by on this project. You do NOT need it to use the board — an unjoined session acts as "${ctx.forcedName ?? ctx.provider}" automatically, and a name in the connection URL (/mcp/<project>/<provider>/<name>) survives every reconnect. Call it when you want a different name, or to get the board's "what's new" notes. Choose the agent name you will be known by on this project (lowercase, e.g. "${ctx.provider}", "${ctx.provider}-2", "${ctx.provider}-auth"). Your provider is fixed by the connection (${ctx.provider}). Reusing your previous name always works and gives you back your journal, claims and inbox — names are never locked, so a restart or a dropped connection can never keep you out of your own identity. You only get a note if another session used the name moments ago.`,
     { name: z.string().min(1).max(40).describe('your agent name for this session'), project_path: z.string().optional().describe('absolute path of the project root, registers it if unknown') },
     ({ name, project_path }) => {
       name = String(name).trim().toLowerCase();
       const existing = store.getAgent(name);
       if (existing?.provider === 'system') throw new BoardError('forbidden', `"${name}" is reserved for the board's own system messages`, { suggestion: suggestName() });
       if (existing && existing.role !== 'human' && existing.provider && existing.provider !== ctx.provider) throw new BoardError('name_taken', `"${name}" belongs to provider ${existing.provider}; choose a name for ${ctx.provider}`, { suggestion: suggestName() });
-      agent = store.ensureAgent(name, ctx.provider);
       const warnings = [];
+      if (ctx.forcedName && name !== ctx.forcedName) warnings.push(`NOTE: this connection is configured for the name "${ctx.forcedName}"; you are now acting as "${name}" for this session only. A reconnect will bring you back to "${ctx.forcedName}".`);
+      // Check who held the name BEFORE binding, or we would only ever see ourselves.
       // A name is a label, never a lock: a dropped or restarted session must never keep its
       // owner out. We only mention a recent other session, and let the agent judge.
-      const holder = ctx.registry.holder(name);
+      const holder = ctx.registry.holder(name), heldFor = ctx.registry.secondsSince(name);
+      bind(name);
       if (holder && holder !== ctx.sessionId) {
-        const secs = ctx.registry.secondsSince(name);
-        warnings.push(`NOTE: another session used the name "${name}" ${secs}s ago. If that was you (a reconnect after a restart or a dropped connection), ignore this — you have your identity, journal and claims back. If another agent of the same provider is genuinely running right now, one of you should re-join as "${suggestName()}" to avoid sharing an inbox.`);
+        warnings.push(`NOTE: another session used the name "${name}" ${heldFor}s ago. If that was you (a reconnect after a restart or a dropped connection), ignore this — you have your identity, journal and claims back. If another agent of the same provider is genuinely running right now, one of you should re-join as "${suggestName()}" to avoid sharing an inbox.`);
       }
       if (project_path) {
         const other = store.listProjects().find(p => p.id !== pid && p.path && samePath(p.path, project_path));
         if (other) warnings.push(`WARNING: the path ${project_path} is already registered as project "${other.name}". You are connected to "${project.name}" — probably a naming mismatch. Do not work in two projects for one repo: tell the human, or reconnect to "${other.name}".`);
         else store.ensureProject(project.name, project_path, agent);
       }
-      const fresh = store.getProject(pid);
+      let fresh = store.getProject(pid);
       if (!fresh.path && store.members(pid).length === 0) warnings.push(`NOTE: project "${project.name}" was created by your connection and has no history. If this repo already has a project under another name (see board_projects), you are on the wrong one.`);
-      store.join(agent, fresh);
-      ctx.registry.bind(ctx.sessionId, agent.name);
-      ctx.agent = agent;
       const whats_new = store.whatsNewFor(agent, VERSION, changelogSince);
       return { joined: true, you: { name: agent.name, provider: agent.provider }, project: { id: pid, name: project.name, path: fresh.path }, board_version: VERSION,
         ...(whats_new ? { whats_new: { ...whats_new, note: 'The board changed since your last session. Read the notes: tools may have been added or changed.' } } : {}),
@@ -117,15 +134,9 @@ export function buildMcpServer(store, ctx) {
     }, { open: true });
 
   reg('board_status',
-    `Your entry point after board_join. Returns the project brief (latest "Project context"), who is on the project, recent journal entries, active path claims, tasks in progress, what other agents are waiting on from YOU (waiting_on_you), the asks of yours nobody has answered yet, and your unread count. Before joining it only tells you how to join.`,
+    `Your entry point (no board_join needed — an unjoined session acts as "${ctx.forcedName ?? ctx.provider}"). Returns the project brief (latest "Project context"), who is on the project, recent journal entries, active path claims, tasks in progress, what other agents are waiting on from YOU (waiting_on_you), the asks of yours nobody has answered yet, and your unread count. Before joining it only tells you how to join.`,
     { project_path: z.string().optional().describe('Absolute path of the project root, to register it if unknown') },
     ({ project_path }) => {
-      if (!agent) {
-        return { joined: false, project: { id: pid, name: project.name }, provider: ctx.provider, protocol: PROTOCOL,
-          how: `Call board_join with a name (pass project_path so the repo is registered). Suggested free name: "${suggestName()}". Check board_projects if unsure this is the right project.`,
-        other_projects: projectList().filter(p => !p.this_connection).map(p => p.name),
-          agents_on_this_project: store.members(pid).map(m => ({ name: m.name, provider: m.provider })) };
-      }
       if (project_path) store.ensureProject(project.name, project_path, agent);
       const p = store.getProject(pid);
       const brief = latestContext();
@@ -144,7 +155,7 @@ export function buildMcpServer(store, ctx) {
         threads_needing_attention: store.listThreads(pid, { status: 'active' }).filter(t => t.kind !== 'status').map(summary),
         unread: store.unreadCount(agent, pid),
       };
-    }, { open: true });
+    });
 
   reg('board_inbox',
     'Unread messages in this project (from every agent and the human), grouped by thread. Marks them read unless peek=true. Messages from the human and threads mentioning you come first. Call it between work steps — it is how the board reaches you; there is no push and nothing to wait for.',

@@ -175,7 +175,8 @@ switch (cmd) {
         console.log(`  ${a}: point its MCP client at ${url(a)} (see \`board setup ${name}\`)`);
       }
     }
-    console.log(`Done. Each session picks its own agent name with board_join (several sessions of one provider work side by side).
+    console.log(`Done. An agent can use the board immediately, acting as its provider name; board_join only changes the label.
+To pin a fixed identity that survives every reconnect, append it to the URL: .../mcp/${name}/claude/<agent-name>.
 Claude Code asks once to trust the project's .mcp.json. Hooks need curl. Re-run to update. Keep the server always on: board service install`);
     break;
   }

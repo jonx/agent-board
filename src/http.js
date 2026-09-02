@@ -44,10 +44,12 @@ export function createHttpServer({ store, humanToken, uiFile, registry = new Ses
     const url = new URL(req.url, 'http://localhost');
     const path = url.pathname;
     try {
-      // ---- MCP for agents: /mcp/<project>/<provider> ----
-      const m = path.match(/^\/mcp\/([^/]+)\/([^/]+)\/?$/);
-      if (m) return await handleMcp(req, res, decodeURIComponent(m[1]), decodeURIComponent(m[2]));
-      if (path === '/mcp' || path === '/mcp/') return json(res, 400, { error: 'use /mcp/<project>/<provider>' });
+      // ---- MCP for agents: /mcp/<project>/<provider>[/<agent-name>] ----
+      // With a name in the URL the identity is fixed by the connection and survives any
+      // reconnect; without one it defaults to the provider and board_join can change it.
+      const m = path.match(/^\/mcp\/([^/]+)\/([^/]+)(?:\/([^/]+))?\/?$/);
+      if (m) return await handleMcp(req, res, decodeURIComponent(m[1]), decodeURIComponent(m[2]), m[3] ? decodeURIComponent(m[3]) : null);
+      if (path === '/mcp' || path === '/mcp/') return json(res, 400, { error: 'use /mcp/<project>/<provider>[/<agent-name>]' });
 
       if (path === '/' || path === '/index.html') {
         res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
@@ -63,7 +65,7 @@ export function createHttpServer({ store, humanToken, uiFile, registry = new Ses
     }
   });
 
-  async function handleMcp(req, res, projectName, provider) {
+  async function handleMcp(req, res, projectName, provider, forcedName) {
     const body = req.method === 'POST' ? await readJson(req) : undefined;
     const sid = req.headers['mcp-session-id'];
     const existing = sid ? registry.get(sid) : null;
@@ -77,14 +79,13 @@ export function createHttpServer({ store, humanToken, uiFile, registry = new Ses
     if (!/^[a-z0-9][a-z0-9._-]{0,39}$/.test(provider)) return json(res, 400, { error: 'bad_provider', message: 'provider must be like claude, codex, gemini' });
     let project;
     try { project = store.ensureProject(projectName, null, null); } catch (e) { return json(res, 400, { error: e.code ?? 'bad_request', message: e.message }); }
-    const ctx = { project, provider, sessionId: null, agent: null, registry };
+    const ctx = { project, provider, forcedName, sessionId: null, agent: null, registry };
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: () => randomUUID(),
       enableJsonResponse: true,
       onsessioninitialized: (id) => { ctx.sessionId = id; registry.add(id, { transport, projectName, provider }); },
     });
     transport.onclose = () => { if (ctx.sessionId) registry.remove(ctx.sessionId); };
-    transport.onerror = () => { if (ctx.sessionId) registry.remove(ctx.sessionId); };
     const server = buildMcpServer(store, ctx);
     await server.connect(transport);
     await transport.handleRequest(req, res, body);
