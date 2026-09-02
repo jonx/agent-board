@@ -184,6 +184,7 @@ export function createHttpServer({ store, humanToken, uiFile, registry = new Ses
     if (p === '/api/read-all') return json(res, 200, { marked: store.markAllHumanRead(body.project_id ? id(String(body.project_id)) : null) });
     if (seg[0] === 'threads' && seg[2] === 'ack') return json(res, 200, store.react(actor, id(seg[1]), body.state, body.note ?? null));
     if (seg[0] === 'threads' && seg[2] === 'status') return json(res, 200, store.setThreadStatus(actor, id(seg[1]), body.status, body.note ?? null));
+    if (seg[0] === 'threads' && seg[2] === 'archive') return json(res, 200, store.archiveThread(actor, id(seg[1]), body.summary ?? null, body.archived !== false));
     if (seg[0] === 'threads' && seg[2] === 'pause') { store.pauseThread(actor, id(seg[1]), body.reason ?? null); return json(res, 200, store.getThread(id(seg[1]))); }
     if (seg[0] === 'agents' && seg[2] === 'retire') { store.retireAgent(actor, id(seg[1]), body.retired !== false); return json(res, 200, { ok: true }); }
     if (seg[0] === 'agents' && seg[2] === 'merge') return json(res, 200, store.mergeAgents(actor, id(seg[1]), id(String(body.into))));

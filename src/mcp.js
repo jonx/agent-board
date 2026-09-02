@@ -13,7 +13,7 @@ import { VERSION, changelogSince } from './changelog.js';
 
 export const TOOL_NAMES = [
   'board_projects', 'board_join', 'board_status', 'board_inbox', 'board_threads', 'board_read', 'board_post',
-  'board_ack', 'board_ask', 'board_request_review', 'board_propose_board_change', 'board_resolve',
+  'board_ack', 'board_ask', 'board_request_review', 'board_propose_board_change', 'board_resolve', 'board_archive',
   'board_journal', 'board_context', 'board_tasks', 'board_task', 'board_claim', 'board_release',
 ];
 
@@ -28,7 +28,8 @@ const PROTOCOL = [
   '4. Asked something you cannot answer right away? board_ack "working" (or "declined"), then answer when you get to it. Asked something you CAN answer? Answer now: an unanswered question stalls someone else.',
   '5. When a step is done: board_request_review; act on verdicts. Post the request and carry on with other work: do not sit on it.',
   '6. Blocked on someone else\'s answer: mark the task blocked (board_task), say so in board_journal, and switch to other work. If there is nothing else, write a handoff journal and end your turn: do not idle, do not re-ask, do not ping.',
-  '7. Before finishing: board_journal a handoff note, board_release your claims, update board_context if the picture changed.',
+  '7. When a thread has served its purpose and the work is really done: board_archive with an account of what you did and how you checked it. That is your own verification step, not tidying up.',
+  '8. Before finishing: board_journal a handoff note, board_release your claims, update board_context if the picture changed.',
   'Everything you post is public to the whole project. There are no private messages.',
 ];
 
@@ -74,7 +75,7 @@ export function buildMcpServer(store, ctx) {
     }));
   const summary = (t) => {
     const acks = store.threadAcks(t.id);
-    return { id: t.id, kind: t.kind, title: t.title, status: t.status, needs_human: !!t.needs_human, paused: t.paused_reason ?? null, by: t.created_by_name, ref: t.ref ?? undefined, messages: t.message_count, updated_at: t.updated_at,
+    return { id: t.id, kind: t.kind, title: t.title, status: t.status, ...(t.archived_at ? { archived_at: t.archived_at } : {}), needs_human: !!t.needs_human, paused: t.paused_reason ?? null, by: t.created_by_name, ref: t.ref ?? undefined, messages: t.message_count, updated_at: t.updated_at,
       ...(acks.length ? { acks: acks.map(a => `${a.agent}: ${a.state}${a.note ? ` (${a.note})` : ''}`) } : {}) };
   };
 
@@ -224,6 +225,15 @@ export function buildMcpServer(store, ctx) {
       const t = store.getThread(thread_id);
       if (!t || t.project_id !== pid) throw new BoardError('not_found', 'thread not found in this project');
       return summary(store.setThreadStatus(agent, thread_id, reopen ? 'open' : 'resolved', note));
+    });
+
+  reg('board_archive',
+    `Close a thread for good, once the work it asked for is actually done. You must say what you did and how you checked it: that account is posted in the thread, so archiving is the moment you verify you really delivered what was asked, not a way to tidy up. Refused while a human decision is pending or while changes are outstanding. Nothing is hidden: the thread stays listed and readable for ever, and can be reopened.`,
+    { thread_id: z.number().int(), summary: z.string().min(20).describe('what was done, and how you verified it (tests run, files changed, commit)'), reopen: z.boolean().optional().describe('set true to bring an archived thread back') },
+    ({ thread_id, summary: note, reopen = false }) => {
+      const t = store.getThread(thread_id);
+      if (!t || t.project_id !== pid) throw new BoardError('not_found', 'thread not found in this project');
+      return summary(store.archiveThread(agent, thread_id, note, !reopen));
     });
 
   reg('board_journal',

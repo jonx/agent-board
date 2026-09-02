@@ -188,6 +188,7 @@ export class Store {
   listThreads(projectId, { status = null, kind = null, limit = 50 } = {}) {
     const where = ['t.project_id = ?']; const args = [projectId];
     if (status === 'all') status = null;
+    else where.push('t.archived_at IS NULL');
     if (status === 'active') where.push(`t.status IN ('open','awaiting_human','changes_requested')`);
     else if (status) { where.push('t.status = ?'); args.push(status); }
     if (kind) { where.push('t.kind = ?'); args.push(kind); }
@@ -218,7 +219,7 @@ export class Store {
    *  of "needs the human", used by the UI, the CLI and the project counters. */
   threadsIndex() {
     return this.db.prepare(`
-      SELECT t.id, t.project_id, t.kind, t.title, t.status, t.needs_human, t.paused_reason, t.updated_at,
+      SELECT t.id, t.project_id, t.kind, t.title, t.status, t.needs_human, t.paused_reason, t.archived_at, t.updated_at,
         (SELECT max(m.id) FROM messages m WHERE m.thread_id = t.id) AS last_message_id,
         (SELECT max(m.id) FROM messages m JOIN agents a ON a.id = m.author_id WHERE m.thread_id = t.id AND a.role = 'human') AS human_last_id,
         (SELECT a.role FROM messages m JOIN agents a ON a.id = m.author_id WHERE m.thread_id = t.id ORDER BY m.id DESC LIMIT 1) AS last_author_role,
@@ -358,6 +359,34 @@ export class Store {
     return this.getThread(threadId);
   }
 
+  /** Close a thread for good, after saying what was actually done. Nothing is hidden:
+   *  the thread stays listed (greyed) and readable for ever, and it can be reopened. */
+  archiveThread(actor, threadId, summary, archived = true) {
+    const thread = this.getThread(threadId);
+    if (!thread) throw new BoardError('not_found', 'thread not found');
+    this.assertCanAct(actor, thread.project_id, thread);
+    if (archived) {
+      if (!summary || summary.trim().length < 20) {
+        throw new BoardError('bad_input', 'archiving requires a short account of what was actually done and how you checked it (at least 20 characters). If the work is not finished, do not archive.');
+      }
+      if (actor.role !== 'human') {
+        if (thread.needs_human && thread.status !== 'approved' && thread.status !== 'rejected') throw new BoardError('human_only', 'this thread waits for a human decision; only the human can archive it before that');
+        if (thread.status === 'changes_requested') throw new BoardError('bad_input', 'changes were requested on this thread: address them and get an approval before archiving');
+      }
+    }
+    const t = now();
+    this.db.exec('BEGIN');
+    try {
+      if (summary?.trim()) this.insertMessage({ threadId, projectId: thread.project_id, author: actor, body: summary.trim() });
+      this.db.prepare(`UPDATE threads SET archived_at = ?, archived_by = ?, status = CASE WHEN ? AND status IN ('open','changes_requested') THEN 'resolved' ELSE status END, updated_at = ? WHERE id = ?`)
+        .run(archived ? t : null, archived ? actor.id : null, archived ? 1 : 0, t, threadId);
+      this.db.exec('COMMIT');
+    } catch (e) { this.db.exec('ROLLBACK'); throw e; }
+    this.event(archived ? 'thread.archived' : 'thread.unarchived', { agentId: actor.id, projectId: thread.project_id, threadId, data: { by: actor.name } });
+    this.emit('thread', { projectId: thread.project_id, threadId });
+    return this.getThread(threadId);
+  }
+
   pauseThread(actor, threadId, reason) {
     this.requireHuman(actor, 'pause or resume a thread');
     const thread = this.getThread(threadId);
@@ -468,7 +497,7 @@ export class Store {
              (SELECT m.body FROM messages m WHERE m.thread_id = t.id ORDER BY m.id DESC LIMIT 1) AS last_body,
              (SELECT a.name FROM messages m JOIN agents a ON a.id = m.author_id WHERE m.thread_id = t.id ORDER BY m.id DESC LIMIT 1) AS last_author
       FROM threads t
-      WHERE t.project_id = ? AND t.status IN ('open','changes_requested') AND t.paused_reason IS NULL
+      WHERE t.project_id = ? AND t.status IN ('open','changes_requested') AND t.paused_reason IS NULL AND t.archived_at IS NULL
         AND EXISTS (SELECT 1 FROM messages m WHERE m.thread_id = t.id AND m.author_id <> ?
                      AND (m.mentions LIKE '%"' || ?2b || '"%' OR m.mentions LIKE '%"all"%')
                      AND m.id > COALESCE((SELECT max(m2.id) FROM messages m2 WHERE m2.thread_id = t.id AND m2.author_id = ?), 0))
@@ -482,7 +511,7 @@ export class Store {
     return this.db.prepare(`
       SELECT t.id, t.kind, t.title, t.status, t.created_at FROM threads t
       WHERE t.project_id = ? AND t.created_by = ? AND t.kind IN ('question','review','decision','board-change')
-        AND t.status IN ('open','awaiting_human')
+        AND t.status IN ('open','awaiting_human') AND t.archived_at IS NULL
         AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.thread_id = t.id AND m.author_id <> ?)
       ORDER BY t.created_at LIMIT 20`).all(projectId, agent.id, agent.id);
   }
@@ -631,6 +660,7 @@ export class Store {
 
 /** What a thread asks of the human. See threadsIndex(). */
 export function attentionOf(t) {
+  if (t.archived_at) return 'ambient';   // settled and accounted for: never asks for anything
   if (t.status === 'awaiting_human' || t.paused_reason) return 'action';
   if (t.mentions_human > 0) return 'reply';
   if (t.human_last_id && t.last_message_id > t.human_last_id && t.last_author_role !== 'human' && t.last_kind !== 'system') return 'reply';

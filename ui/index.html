@@ -23,6 +23,7 @@
   .badge.approved { color:var(--ok); border-color:var(--ok) } .badge.rejected, .badge.changes_requested { color:var(--bad); border-color:var(--bad) } .badge.paused { color:var(--bad); border-color:var(--bad); font-weight:600 }
   .tabs { display:flex; gap:4px; padding:8px; border-bottom:1px solid var(--line); position:sticky; top:0; background:var(--panel); z-index:1; width:max-content; min-width:100% }
   .tabs button { white-space:nowrap; padding:5px 9px; font-size:13px } .tabs .n { display:inline-block; margin-left:4px; min-width:16px; padding:0 4px; border-radius:8px; background:var(--accent); color:#fff; font-size:11px; line-height:16px; text-align:center } .tabs button.on .n { background:#fff; color:var(--accent) }
+  .item.arch { opacity:.5 } .item.arch .t { font-weight:500 } .item.arch:hover { opacity:.85 }
   .item.unread .t { font-weight:700 } section .item.unread .t::before { content:''; width:7px; height:7px; border-radius:50%; background:var(--accent); flex:none }
   button { font:inherit; padding:5px 10px; border-radius:6px; border:1px solid var(--line); background:var(--panel); color:var(--fg); cursor:pointer } button:hover { border-color:var(--accent) } button.on { background:var(--accent); color:#fff; border-color:var(--accent) }
   button.ok { border-color:var(--ok); color:var(--ok) } button.bad { border-color:var(--bad); color:var(--bad) } button.warn { border-color:var(--warn); color:var(--warn) }
@@ -274,7 +275,8 @@ async function loadThreads() {
   const [all, detail] = await Promise.all([api(`/api/projects/${S.project}/threads?limit=200`), api(`/api/projects/${S.project}`)]);
   S.detail = detail;
   const unread = (t) => S.unreadThreads?.has(t.id);
-  const lists = { attention: all.filter(needsMe), active: all.filter(t => ACTIVE.has(t.status)), all };
+  const live = all.filter(t => !t.archived_at);
+  const lists = { attention: live.filter(needsMe), active: all.filter(t => ACTIVE.has(t.status) || t.archived_at), all };
   for (const b of document.querySelectorAll('.tabs button')) {
     const f = b.dataset.f, label = b.dataset.label ?? (b.dataset.label = b.textContent.trim());
     const n = f === 'attention' ? lists.attention.filter(unread).length : 0;   // only this tab ever badges
@@ -287,9 +289,9 @@ async function loadThreads() {
   const can = !!token;
   const list = lists[S.filter];
   S.threads = list;
-  const html = list.map(t => `<div class="item" data-id="${t.id}">
+  const html = list.map(t => `<div class="item${t.archived_at ? ' arch' : ''}" data-id="${t.id}">
       <div class="t"><span class="badge k">${t.kind}</span><span class="title" title="${esc(t.title)}">${esc(t.title)}</span></div>
-      <div class="m"><span class="badge ${t.status}">${t.status.replace('_', ' ')}</span>${t.paused_reason ? '<span class="badge paused">paused</span>' : ''}<span>${t.message_count} msg</span><span>${fmt(t.last_at ?? t.updated_at)}</span></div>
+      <div class="m">${t.archived_at ? '<span class="badge" title="Archived: the work was done and accounted for. Still readable, and it can be reopened.">archived</span>' : ''}<span class="badge ${t.status}">${t.status.replace('_', ' ')}</span>${t.paused_reason ? '<span class="badge paused">paused</span>' : ''}<span>${t.message_count} msg</span><span>${fmt(t.last_at ?? t.updated_at)}</span></div>
       ${t.last_body ? `<div class="preview"><b>${esc(t.last_author ?? '')}:</b> ${esc(oneLine(t.last_body))}</div>` : ''}
       ${t.acks?.length ? `<div class="acks">${ackChips(t.acks)}</div>` : ''}
       ${can && t.status === 'awaiting_human' ? `<div class="decide" data-for="${t.id}"><input class="why" placeholder="optional note" title="Optional: a word for the agents, posted with your decision."><button class="ok" data-d="approve" title="Approve without opening the thread; the agents may proceed.">ok</button><button class="bad" data-d="reject" title="Refuse without opening the thread; the agents must not proceed.">non</button></div>` : ''}</div>`).join('')
@@ -385,11 +387,12 @@ async function openThread(id) {
   const gated = !!t.needs_human;
   $('#thread').innerHTML = `
     <div class="thead"><h2><span class="badge k">${t.kind}</span> ${esc(t.title)}</h2>
-      <div class="row"><span class="badge ${t.status}">${t.status.replace('_',' ')}</span>${gated ? '<span class="badge h">needs human</span>' : ''}${t.paused_reason ? `<span class="badge paused">paused: ${esc(t.paused_reason)}</span>` : ''}
+      <div class="row"><span class="badge ${t.status}">${t.status.replace('_',' ')}</span>${t.archived_at ? '<span class="badge" title="Archived: closed with an account of what was done.">archived</span>' : ''}${gated ? '<span class="badge h">needs human</span>' : ''}${t.paused_reason ? `<span class="badge paused">paused: ${esc(t.paused_reason)}</span>` : ''}
         <span>#${t.id} · by ${esc(t.created_by_name)} · ${fmt(t.created_at)}</span>${t.ref ? `<span>ref: <code>${esc(t.ref)}</code></span>` : ''}
         ${can ? `<span class="ackbar">${Object.entries(ACK_EMOJI).map(([k, e]) => `<button data-ack="${k}" title="Tell the agents, without writing a message, that you ${ACK_LABEL[k]}.">${e}</button>`).join('')}</span>
         <button class="warn" id="pauseT" title="${t.paused_reason ? 'Let the agents post in this thread again.' : 'Freeze this thread: agents cannot post in it until you resume, and they are told why. You can still write.'}">${t.paused_reason ? 'resume thread' : 'pause thread'}</button>
-        ${['approved','rejected','resolved'].includes(t.status) ? '<button id="reopenT" title="Put this thread back in play.">reopen</button>' : '<button id="resolveT" title="Mark this conversation settled. It leaves the active lists; nothing is deleted.">resolve</button>'}` : ''}
+        ${['approved','rejected','resolved'].includes(t.status) ? '<button id="reopenT" title="Put this thread back in play.">reopen</button>' : '<button id="resolveT" title="Mark this conversation settled. It leaves the active lists; nothing is deleted.">resolve</button>'}
+        ${t.archived_at ? '<button id="unarchiveT" title="Bring this thread back: it stops being greyed out and can be worked on again.">unarchive</button>' : '<button id="archiveT" title="Close this thread for good, with an account of what was done. It stays listed and readable, greyed out. Agents must give the same account, which is what makes archiving a verification step for them.">archive</button>'}` : ''}
       </div>${acks?.length ? `<div class="acks" style="margin-top:8px">${ackChips(acks)}</div>` : ''}</div>
     <div class="msgs">${messages.map((m, i) => {
       const prev = messages[i - 1];
@@ -421,6 +424,12 @@ async function openThread(id) {
   $('#pauseT').onclick = async () => { const reason = t.paused_reason ? null : prompt('Reason (agents cannot post here until resumed):', 'Hold on.'); if (!t.paused_reason && reason == null) return; await api(`/api/threads/${id}/pause`, { reason }); openThread(id); };
   const st = $('#resolveT') || $('#reopenT');
   st.onclick = async () => { await api(`/api/threads/${id}/status`, { status: st.id === 'resolveT' ? 'resolved' : 'open' }); openThread(id); };
+  $('#archiveT') && ($('#archiveT').onclick = async () => {
+    const note = prompt('Archive this thread.\n\nSay what was actually done (this is posted in the thread, and it is what agents must provide too):', 'Done and verified.');
+    if (note == null) return;
+    await api(`/api/threads/${id}/archive`, { summary: note, archived: true }); await loadProjects(); openThread(id);
+  });
+  $('#unarchiveT') && ($('#unarchiveT').onclick = async () => { await api(`/api/threads/${id}/archive`, { archived: false }); await loadProjects(); openThread(id); });
 }
 
 // ---- header actions ----

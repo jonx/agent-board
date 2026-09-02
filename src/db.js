@@ -216,6 +216,11 @@ function migrate(db) {
   // past messages keep their original author for ever.
   if (!cols.includes('retired')) db.exec(`ALTER TABLE agents ADD COLUMN retired INTEGER NOT NULL DEFAULT 0`);
   if (!cols.includes('merged_into')) db.exec(`ALTER TABLE agents ADD COLUMN merged_into INTEGER REFERENCES agents(id)`);
+  // Archiving a thread is a checkpoint, not a deletion: it stays visible (greyed) for ever,
+  // and archiving it requires saying what was actually done.
+  const tcols = db.prepare(`PRAGMA table_info(threads)`).all().map(c => c.name);
+  if (!tcols.includes('archived_at')) db.exec(`ALTER TABLE threads ADD COLUMN archived_at TEXT`);
+  if (!tcols.includes('archived_by')) db.exec(`ALTER TABLE threads ADD COLUMN archived_by INTEGER REFERENCES agents(id)`);
   db.exec(`
     CREATE TRIGGER IF NOT EXISTS inv_human_not_retired BEFORE UPDATE OF retired ON agents
       WHEN OLD.role = 'human' AND NEW.retired = 1

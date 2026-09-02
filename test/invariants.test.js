@@ -30,8 +30,12 @@ test('no blocking primitive on the agent surface', () => {
 });
 
 test('MCP surface exposes no human-only power', () => {
+  // Archiving a thread is deliberately shared: agents close their own work with an account
+  // of it, and the store refuses when a human decision is still pending (see the archive test).
+  // Everything else in this list is the human's alone and must never appear as a tool.
   for (const name of TOOL_NAMES) {
-    assert.doesNotMatch(name, /approve|pause|resume|archive|delete|human/i, `tool ${name} looks like a human-only action`);
+    assert.doesNotMatch(name, /approve|pause|resume|retire|merge|delete|human/i, `tool ${name} looks like a human-only action`);
+    assert.doesNotMatch(name, /archive/i.test(name) && !/^board_archive$/.test(name) ? /archive/i : /$^/, `unexpected archive tool ${name}`);
   }
 });
 
@@ -168,4 +172,34 @@ test('agents can be retired or merged without ever rewriting the record', () => 
   assert.throws(() => s.db.prepare(`UPDATE agents SET retired = 1 WHERE role = 'human'`).run(), /cannot be retired/);
   assert.equal(s.ensureAgent('codex', 'codex').retired, 0, 'an agent that comes back is listed again');
   assert.equal(s.verifyChain().ok, true, 'the message log is intact throughout');
+});
+
+test('archiving is a verification step, not a way to tidy up', () => {
+  const s = new Store(openDatabase(':memory:'));
+  const a = s.ensureAgent('a'), h = s.human(), p = s.ensureProject('p');
+  s.join(a, p);
+  const r = s.createThread(a, { projectId: p.id, kind: 'review', title: 'refactor', body: 'please review' });
+
+  // An agent must account for what it did; a token note is refused.
+  assert.throws(() => s.archiveThread(a, r.id, 'done'), /what was actually done/);
+  // Outstanding changes must be addressed first.
+  s.post(a, { threadId: r.id, body: 'nit: rename', verdict: 'request_changes' });
+  assert.throws(() => s.archiveThread(a, r.id, 'Renamed the symbol and ran the suite, all green.'), /address them/);
+  s.post(a, { threadId: r.id, body: 'fixed', verdict: 'approve' });
+  const arch = s.archiveThread(a, r.id, 'Renamed the symbol, ran npm test (12/12) and pushed abc1234.');
+  assert.ok(arch.archived_at);
+  // The account is on the record, and the thread stays readable and listed.
+  assert.match(s.threadMessages(r.id).at(-1).body, /npm test/);
+  assert.equal(s.listThreads(p.id, { status: 'all' }).some(t => t.id === r.id), true);
+  assert.equal(s.listThreads(p.id, { status: 'active' }).some(t => t.id === r.id), false);
+  assert.equal(s.threadsIndex().find(t => t.id === r.id).attention, 'ambient', 'archived threads never ask the human for anything');
+  assert.equal(s.waitingOnAgent(a, p.id).some(t => t.id === r.id), false);
+  // Reopening works and deletes nothing.
+  s.archiveThread(h, r.id, null, false);
+  assert.equal(s.getThread(r.id).archived_at, null);
+  assert.equal(s.verifyChain().ok, true);
+
+  // A decision still waiting on the human cannot be archived away by an agent.
+  const d = s.createThread(a, { projectId: p.id, kind: 'decision', title: 'drop table', body: 'irreversible' });
+  assert.throws(() => s.archiveThread(a, d.id, 'Decided it myself and moved on, nothing to see.'), /only the human/);
 });

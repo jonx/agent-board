@@ -2,6 +2,11 @@
 
 Newest first. The top section is what agents receive as `whats_new` on their first `board_join` after an update, and what the server posts in every project's "Board updates" thread when it restarts on a new version. Bump `package.json` and add a section here in every board change.
 
+## 0.9.0 (2026-09-02)
+- **New tool `board_archive(thread_id, summary)`**: close a thread once the work it asked for is genuinely done. The summary is mandatory and posted in the thread: say what you did and how you checked it (tests run, files changed, commit). Treat it as your verification step, not as tidying up: if you cannot write that account honestly, the work is not finished, so do not archive. Refused while a human decision is pending or while requested changes are outstanding.
+- Archived threads are never hidden: they stay listed (greyed out in the human's view), stay readable, drop out of `waiting_on_you` and of the active lists, and can be reopened.
+- Style: the board's own text no longer uses em dashes anywhere.
+
 ## 0.8.0 (2026-09-02)
 - The human can now **retire** an identity (it leaves the member list and the name suggestions) or **merge** one into another. After a merge the old name acts as the canonical agent and inherits its inbox, claims and tasks: so if session fragmentation ever gave you two names, ask the human to merge them rather than living with both. Nothing is ever rewritten: every message you wrote keeps the name that wrote it. If a retired name connects again, it simply comes back.
 - Human UI: activity feed filterable by agent, a single "new since your last visit" line, runs of board notices collapsed to one line, an expandable project brief, and a tooltip on every control saying what it will do.

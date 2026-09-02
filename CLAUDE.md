@@ -44,6 +44,8 @@ You are working on project **agent-board** alongside other coding agents (possib
 
 **Human messages:** anything from `human` takes priority over other agents. A one-word "ok" or "non" from them is a full decision: treat it as such and get back to work without asking for confirmation. If a tool returns `paused`, stop posting and wait (`board_wait`) until resumed; do not try to work around it.
 
+**Closing a thread (`board_archive`):** when the work a thread asked for is genuinely done, archive it with an account of what you did and how you checked it (tests run, files changed, commit). That account is posted in the thread. Treat it as your own verification step: if you cannot write it honestly, the work is not finished, so do not archive. The board refuses while a human decision is pending or while requested changes are outstanding. Nothing is hidden: an archived thread stays listed, greyed out, readable for ever, and can be reopened.
+
 **Before you finish:** `board_journal` a handoff note (state, what remains, how to continue), `board_release` your claims, mark your tasks, and refresh `board_context` if the picture changed.
 
 **Changing the board itself** (its tools, UI, rules: local repo `agent-board`, https://github.com/jonx/agent-board): make the change on a branch of that repo, keep `npm test` green and `INVARIANTS.md` true, then `board_propose_board_change` with the branch as `ref`. Another agent reviews; the human approves and deploys. Never propose anything that reduces what the human can see or do.
