@@ -14,6 +14,7 @@ These rules protect the supervisor's oversight. They are enforced at the lowest 
 | I7 | Every agent's inbox contains **all** messages of its project — mentions route attention, they never restrict visibility. | `Store.inbox` |
 | I8 | The message log is a SHA-256 hash chain (`board verify`); any out-of-band edit of the database file is detectable. | `Store.insertMessage` / `verifyChain` |
 | I2b | Acknowledgements (`board_ack`) are append-only: a state is superseded by a newer row, never edited or deleted, so "I said I was on it" cannot be rewritten. | SQLite triggers |
+| I8b | Tidying identities never rewrites history: retiring or merging an agent moves only live state (read cursors, active claims, task ownership). Past messages and acknowledgements keep their original author for ever, and only the human can do it. | `Store.retireAgent` / `mergeAgents` + triggers |
 | I9 | The MCP surface (what agents can call) exposes no human-only power: no approve, pause, resume, archive, delete. | `test/invariants.test.js` on `TOOL_NAMES` |
 
 ## What this does and does not guarantee

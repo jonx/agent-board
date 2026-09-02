@@ -57,7 +57,13 @@
   .decide { display:flex; gap:5px; margin-top:6px } .decide button { padding:2px 10px; font-size:12px } .decide .why { flex:1; font:inherit; font-size:12px; padding:2px 6px; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--fg); min-width:0 }
   .hint { color:var(--muted); font-size:11.5px; margin-top:4px }
   .side h3 { font-size:11px; text-transform:uppercase; letter-spacing:.5px; color:var(--muted); margin:14px 12px 4px } .side .li { padding:4px 12px; font-size:12px; display:flex; gap:6px; align-items:center; justify-content:space-between } .side .li .n { flex:1 } .side .li button { padding:1px 6px; font-size:11px }
-  .side .ctx { margin:0 12px 8px; padding:8px; border:1px solid var(--line); border-radius:6px; font-size:12px; white-space:pre-wrap; max-height:200px; overflow:auto; background:var(--bg) }
+  .side .ctx { margin:0 12px 4px; padding:8px 10px; border:1px solid var(--line); border-radius:6px; font-size:12px; background:var(--bg); overflow-wrap:anywhere }
+  .side .ctx.clipped { max-height:190px; overflow:hidden; -webkit-mask-image:linear-gradient(#000 70%, transparent) } .side .more { margin:0 12px 8px; font-size:11.5px }
+  .side .li button + button { margin-left:4px }
+  .newline { display:flex; align-items:center; gap:8px; margin:16px 0 8px; color:var(--accent); font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.4px }
+  .newline::before, .newline::after { content:''; flex:1; border-top:1px solid var(--accent); opacity:.5 }
+  .filters { display:flex; gap:5px; flex-wrap:wrap; align-items:center; padding:8px 16px 0 } .filters button { padding:2px 9px; font-size:12px }
+  .filters .lbl { color:var(--muted); font-size:11.5px; margin-right:2px }
   dialog { border:1px solid var(--line); border-radius:8px; background:var(--panel); color:var(--fg); padding:16px; min-width:420px } dialog label { display:block; margin:8px 0 2px; font-size:12px; color:var(--muted) } dialog input, dialog select { width:100%; font:inherit; padding:6px; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--fg) }
   .dot { width:7px; height:7px; border-radius:50%; background:var(--muted); display:inline-block } .dot.live { background:var(--ok) }
 </style>
@@ -66,19 +72,19 @@
 <header>
   <h1>agent-board</h1>
   <span class="dot" id="live" title="live updates"></span>
-  <button id="newProject">+ project</button>
-  <button id="newThread" disabled>+ thread</button>
+  <button id="newProject" title="Create a project by hand. Normally a project appears on its own when an agent first connects to /mcp/&lt;project&gt;/&lt;provider&gt;.">+ project</button>
+  <button id="newThread" disabled title="Start a conversation yourself: a question to the agents, a decision to record, or a review request.">+ thread</button>
   <span class="sp"></span>
-  <button id="copyLink" title="copy a link to what you are looking at">🔗 link</button>
-  <button id="readAll" title="mark everything as seen">mark all seen</button>
-  <button id="verify" title="verify the message hash chain">verify log</button>
+  <button id="copyLink" title="Copy a link to exactly what you are looking at (project and thread). The link never contains your access token, so anyone you send it to gets read-only access.">🔗 link</button>
+  <button id="readAll" title="Clear every unread badge on every project. Nothing is deleted and the agents are not affected — this is only your own read marker.">mark all seen</button>
+  <button id="verify" title="Recompute the SHA-256 chain over every message to check that nothing was altered or removed in the database file behind the board's back.">verify log</button>
   <span class="tok" id="tok">no human token — read-only</span>
 </header>
 <main>
   <aside id="projects"></aside>
   <div class="split" data-col="1" title="drag to resize · double-click to fit content"></div>
   <section>
-    <div class="tabs"><button data-f="attention" class="on">Needs me</button><button data-f="active">Active</button><button data-f="all">All</button><button data-f="team">Team</button></div>
+    <div class="tabs"><button data-f="attention" class="on" title="Only what asks something of you: decisions waiting for your approval, threads you are in that got a reply, and @human mentions.">Needs me</button><button data-f="active" title="Every thread still open, including agent-to-agent work that does not need you.">Active</button><button data-f="all" title="Every thread of this project, including resolved and rejected ones.">All</button><button data-f="team" title="The project brief, who is on it, which files are claimed, and the task list.">Team</button></div>
     <div id="threads"></div>
   </section>
   <div class="split" data-col="2" title="drag to resize · double-click to fit content"></div>
@@ -270,7 +276,7 @@ async function loadThreads() {
       <div class="m"><span class="badge ${t.status}">${t.status.replace('_', ' ')}</span>${t.paused_reason ? '<span class="badge paused">paused</span>' : ''}<span>${t.message_count} msg</span><span>${fmt(t.last_at ?? t.updated_at)}</span></div>
       ${t.last_body ? `<div class="preview"><b>${esc(t.last_author ?? '')}:</b> ${esc(oneLine(t.last_body))}</div>` : ''}
       ${t.acks?.length ? `<div class="acks">${ackChips(t.acks)}</div>` : ''}
-      ${can && t.status === 'awaiting_human' ? `<div class="decide" data-for="${t.id}"><input class="why" placeholder="optional note"><button class="ok" data-d="approve">ok</button><button class="bad" data-d="reject">non</button></div>` : ''}</div>`).join('')
+      ${can && t.status === 'awaiting_human' ? `<div class="decide" data-for="${t.id}"><input class="why" placeholder="optional note" title="Optional: a word for the agents, posted with your decision."><button class="ok" data-d="approve" title="Approve without opening the thread — the agents may proceed.">ok</button><button class="bad" data-d="reject" title="Refuse without opening the thread — the agents must not proceed.">non</button></div>` : ''}</div>`).join('')
     || `<div class="empty">${S.filter === 'attention' ? 'Nothing needs you right now.' : 'No threads.'}</div>`;
   // Re-rendering under the cursor swallows clicks, so only touch the DOM when something changed.
   const el = $('#threads');
@@ -307,20 +313,39 @@ $('#threads').onclick = async (e) => {
 async function renderTeam() {
   const d = S.detail ?? (S.detail = await api(`/api/projects/${S.project}`));
   if (d.context) { READ[teamKey()] = d.context.id; saveRead(); document.querySelector('.tabs button[data-f=team]').innerHTML = 'Team'; }
-  const pauseBtn = (a) => token && a.role !== 'human' ? `<button class="${a.paused_reason ? 'ok' : 'bad'}" data-pause-agent="${a.id}" data-paused="${a.paused_reason ? 1 : 0}">${a.paused_reason ? 'resume' : 'pause'}</button>` : '';
+  const acts = (a) => (!token || a.role === 'human' || a.provider === 'system') ? '' :
+    `<button class="${a.paused_reason ? 'ok' : 'bad'}" data-pause-agent="${a.id}" data-paused="${a.paused_reason ? 1 : 0}" title="${a.paused_reason ? 'Let this agent post again' : 'Block this agent from posting until you resume it; it is told why'}">${a.paused_reason ? 'resume' : 'pause'}</button>
+     <button data-merge="${a.id}" data-name="${esc(a.name)}" title="Merge this identity into another: from now on this name acts as the other agent and inherits its inbox. Past messages keep this name — nothing is rewritten.">merge…</button>
+     <button data-retire="${a.id}" data-name="${esc(a.name)}" title="Hide this identity from the lists. Its past messages stay on the board with its name (the log is append-only, so nothing is ever erased). It reappears if the agent connects again.">retire</button>`;
   $('#threads').innerHTML = `<div class="side">
     <h3>Project</h3><div class="li"><span class="n">${esc(d.project.name)}<br><small style="color:var(--muted)">${esc(d.project.path || 'no path registered')}</small></span></div>
-    <h3>Context (latest brief)</h3>${d.context ? `<div class="ctx">${render(d.context.body)}</div><div class="li" style="color:var(--muted)">by ${esc(d.context.author)} · ${fmt(d.context.created_at)} · <a href="#" data-open="${d.context_thread_id}">history</a></div>` : '<div class="li" style="color:var(--muted)">No project context written yet.</div>'}
-    <h3>Members</h3>${d.members.map(a => `<div class="li"><span class="n">${a.live ? '<span class="dot live" title="connected now"></span> ' : ''}${esc(a.name)} <small style="color:var(--muted)">${esc(a.provider || '')}${a.paused_reason ? ' · PAUSED: ' + esc(a.paused_reason) : ''}</small></span>${pauseBtn(a)}</div>`).join('') || '<div class="li">—</div>'}
+    <h3>Context (latest brief)</h3>${d.context ? `<div class="ctx${S.ctxOpen ? '' : ' clipped'}" id="ctxBox">${render(d.context.body)}</div>
+      <div class="more"><button id="ctxToggle" title="${S.ctxOpen ? 'Collapse the project brief' : 'Show the whole project brief'}">${S.ctxOpen ? 'show less' : 'show more'}</button></div>
+      <div class="li" style="color:var(--muted)">by ${esc(d.context.author)} · ${fmt(d.context.created_at)} · <a href="#" data-open="${d.context_thread_id}" title="Open the thread with every past version of this brief">history</a></div>` : '<div class="li" style="color:var(--muted)">No project context written yet.</div>'}
+    <h3>Members</h3>${d.members.map(a => `<div class="li"><span class="n">${a.live ? '<span class="dot live" title="this agent is connected right now"></span> ' : ''}${esc(a.name)} <small style="color:var(--muted)">${esc(a.provider || '')}${a.paused_reason ? ' · PAUSED: ' + esc(a.paused_reason) : ''}</small></span><span>${acts(a)}</span></div>`).join('') || '<div class="li">—</div>'}
     <h3>Active claims</h3>${d.claims.map(c => `<div class="li"><span class="n"><code>${esc(c.path)}</code> — ${esc(c.agent)}${c.note ? ' · ' + esc(c.note) : ''}</span></div>`).join('') || '<div class="li">none</div>'}
     <h3>Tasks</h3>${d.tasks.map(t => `<div class="li"><span class="n"><span class="badge">${t.status}</span> ${esc(t.title)}${t.owner ? ' · ' + esc(t.owner) : ''}</span></div>`).join('') || '<div class="li">none</div>'}
   </div>`;
   $('#threads').querySelectorAll('[data-pause-agent]').forEach(b => b.onclick = async () => {
     const paused = b.dataset.paused === '1';
-    const reason = paused ? null : prompt('Reason shown to the agent (it will be blocked from posting until resumed):', 'Hold on, human reviewing.');
+    const reason = paused ? null : prompt('Reason shown to the agent (it will be blocked from posting until you resume it):', 'Hold on, human reviewing.');
     if (!paused && reason == null) return;
-    await api(`/api/agents/${b.dataset.pauseAgent}/pause`, { reason }); renderTeam();
+    await api(`/api/agents/${b.dataset.pauseAgent}/pause`, { reason }); S.detail = null; renderTeam();
   });
+  $('#threads').querySelectorAll('[data-retire]').forEach(b => b.onclick = async () => {
+    if (!confirm(`Retire "${b.dataset.name}"?\n\nIt disappears from the member list and from name suggestions.\nEverything it wrote stays on the board under its name — the log is append-only, nothing is ever erased.\nIf that agent connects again, it comes back.`)) return;
+    await api(`/api/agents/${b.dataset.retire}/retire`, { retired: true }); S.detail = null; await loadThreads();
+  });
+  $('#threads').querySelectorAll('[data-merge]').forEach(b => b.onclick = async () => {
+    const others = (S.detail?.members ?? []).filter(m => m.role !== 'human' && m.provider !== 'system' && String(m.id) !== b.dataset.merge);
+    if (!others.length) return alert('There is no other agent to merge into.');
+    const into = prompt(`Merge "${b.dataset.name}" into which agent?\n\nFrom now on "${b.dataset.name}" acts as that agent and inherits its inbox, claims and tasks.\nPast messages keep the name that wrote them — nothing is rewritten.\n\nAvailable: ${others.map(m => m.name).join(', ')}`, others[0].name);
+    if (!into) return;
+    const target = others.find(m => m.name === into.trim());
+    if (!target) return alert(`No agent named "${into}".`);
+    await api(`/api/agents/${b.dataset.merge}/merge`, { into: target.id }); S.detail = null; await loadThreads();
+  });
+  $('#ctxToggle') && ($('#ctxToggle').onclick = () => { S.ctxOpen = !S.ctxOpen; S.detail = null; loadThreads(); });
   $('#threads').querySelectorAll('[data-open]').forEach(a => a.onclick = (e) => { e.preventDefault(); openThread(Number(a.dataset.open)); });
 }
 
@@ -346,9 +371,9 @@ async function openThread(id) {
     <div class="thead"><h2><span class="badge k">${t.kind}</span> ${esc(t.title)}</h2>
       <div class="row"><span class="badge ${t.status}">${t.status.replace('_',' ')}</span>${gated ? '<span class="badge h">needs human</span>' : ''}${t.paused_reason ? `<span class="badge paused">paused: ${esc(t.paused_reason)}</span>` : ''}
         <span>#${t.id} · by ${esc(t.created_by_name)} · ${fmt(t.created_at)}</span>${t.ref ? `<span>ref: <code>${esc(t.ref)}</code></span>` : ''}
-        ${can ? `<span class="ackbar">${Object.entries(ACK_EMOJI).map(([k, e]) => `<button data-ack="${k}" title="mark: ${ACK_LABEL[k]}">${e}</button>`).join('')}</span>
-        <button class="warn" id="pauseT">${t.paused_reason ? 'resume thread' : 'pause thread'}</button>
-        ${['approved','rejected','resolved'].includes(t.status) ? '<button id="reopenT">reopen</button>' : '<button id="resolveT">resolve</button>'}` : ''}
+        ${can ? `<span class="ackbar">${Object.entries(ACK_EMOJI).map(([k, e]) => `<button data-ack="${k}" title="Tell the agents, without writing a message, that you ${ACK_LABEL[k]}.">${e}</button>`).join('')}</span>
+        <button class="warn" id="pauseT" title="${t.paused_reason ? 'Let the agents post in this thread again.' : 'Freeze this thread: agents cannot post in it until you resume, and they are told why. You can still write.'}">${t.paused_reason ? 'resume thread' : 'pause thread'}</button>
+        ${['approved','rejected','resolved'].includes(t.status) ? '<button id="reopenT" title="Put this thread back in play.">reopen</button>' : '<button id="resolveT" title="Mark this conversation settled. It leaves the active lists; nothing is deleted.">resolve</button>'}` : ''}
       </div>${acks?.length ? `<div class="acks" style="margin-top:8px">${ackChips(acks)}</div>` : ''}</div>
     <div class="msgs">${messages.map((m, i) => {
       const prev = messages[i - 1];
@@ -358,9 +383,9 @@ async function openThread(id) {
     }).join('') || '<div class="empty">No messages.</div>'}</div>
     ${can ? `<div class="composer"><textarea id="body" placeholder="${t.status === 'awaiting_human' ? 'Type just \'ok\' or \'non\' to decide — anything longer is a plain comment.' : 'Write as human — everyone in the project will see it. @name to notify.'}"></textarea>
       ${t.status === 'awaiting_human' ? '<div class="hint">This thread waits on you: a one-word \'ok\' / \'non\' decides it; a longer message stays a comment.</div>' : ''}
-      <div class="actions"><button id="send" class="on">Post</button>
+      <div class="actions"><button id="send" class="on" title="Post your message to the whole project (⌘/Ctrl+Enter). Every agent sees it; the ones you @mention get it at the top of their inbox.">Post</button>
         <span class="sp"></span>
-        <button class="ok" data-v="approve">Approve</button><button class="warn" data-v="request_changes">Request changes</button><button class="bad" data-v="reject">Reject</button></div></div>` : ''}`;
+        <button class="ok" data-v="approve" title="Approve: the agents may proceed. Your note is posted with the verdict (or just “ok” if you leave the box empty).">Approve</button><button class="warn" data-v="request_changes" title="Send it back for changes. Say what to change in the box — the agent acts on your note.">Request changes</button><button class="bad" data-v="reject" title="Refuse: the agents must not proceed. Say why in the box.">Reject</button></div></div>` : ''}`;
   if (!same || wasAtBottom) art.scrollTop = art.scrollHeight; else art.scrollTop = prevTop;
   if (draft && $('#body')) { $('#body').value = draft; if (hadFocus) { $('#body').focus(); $('#body').setSelectionRange(draft.length, draft.length); } }
   updateHash();

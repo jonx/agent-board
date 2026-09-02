@@ -37,18 +37,74 @@ export class Store {
       ? this.db.prepare(`SELECT * FROM agents WHERE id = ?`).get(nameOrId)
       : this.db.prepare(`SELECT * FROM agents WHERE name = ?`).get(String(nameOrId));
   }
-  listAgents() { return this.db.prepare(`SELECT * FROM agents ORDER BY role DESC, name`).all(); }
+  listAgents({ includeRetired = true } = {}) {
+    return this.db.prepare(`
+      SELECT a.*, m.name AS merged_into_name FROM agents a LEFT JOIN agents m ON m.id = a.merged_into
+      ${includeRetired ? '' : 'WHERE a.retired = 0 AND a.merged_into IS NULL'}
+      ORDER BY a.role DESC, a.retired, a.name`).all();
+  }
+
+  /** Follow a merge to the agent that actually acts now. Never rewrites anything. */
+  canonical(agent) {
+    const seen = new Set();
+    while (agent?.merged_into && !seen.has(agent.id)) { seen.add(agent.id); agent = this.getAgent(agent.merged_into); }
+    return agent;
+  }
+
+  /** Retire an identity: it disappears from the lists and from name suggestions.
+   *  Nothing is deleted — every message it wrote keeps its name, for ever. */
+  retireAgent(actor, agentId, retired = true) {
+    this.requireHuman(actor, 'retire an agent');
+    const a = this.getAgent(agentId);
+    if (!a) throw new BoardError('not_found', 'agent not found');
+    this.db.prepare(`UPDATE agents SET retired = ? WHERE id = ?`).run(retired ? 1 : 0, a.id);
+    this.event(retired ? 'agent.retired' : 'agent.unretired', { agentId: a.id, data: { by: actor.name, name: a.name } });
+    this.emit('agents', {});
+    return this.getAgent(a.id);
+  }
+
+  /** Merge one identity into another: from now on the old name acts as the new one and
+   *  inherits its inbox. Live state (read cursors, active claims, owned tasks) moves;
+   *  the record does not: past messages and acks keep their original author. */
+  mergeAgents(actor, fromId, intoId) {
+    this.requireHuman(actor, 'merge agents');
+    let from = this.getAgent(fromId), into = this.canonical(this.getAgent(intoId));
+    if (!from || !into) throw new BoardError('not_found', 'agent not found');
+    if (from.role === 'human' || into.role === 'human') throw new BoardError('forbidden', 'the human is not an agent');
+    if (from.provider === 'system' || into.provider === 'system') throw new BoardError('forbidden', 'the board account cannot be merged');
+    if (from.id === into.id) throw new BoardError('bad_input', 'an agent cannot be merged into itself');
+    if (this.canonical(into).id === from.id) throw new BoardError('bad_input', 'that would make a loop');
+    this.db.exec('BEGIN');
+    try {
+      // Live state follows the identity.
+      for (const m of this.db.prepare(`SELECT * FROM memberships WHERE agent_id = ?`).all(from.id)) {
+        const t = this.db.prepare(`SELECT * FROM memberships WHERE agent_id = ? AND project_id = ?`).get(into.id, m.project_id);
+        if (t) this.db.prepare(`UPDATE memberships SET last_read_message_id = max(last_read_message_id, ?) WHERE agent_id = ? AND project_id = ?`).run(m.last_read_message_id, into.id, m.project_id);
+        else this.db.prepare(`INSERT INTO memberships (agent_id, project_id, last_read_message_id, joined_at, last_seen_at) VALUES (?,?,?,?,?)`).run(into.id, m.project_id, m.last_read_message_id, m.joined_at, m.last_seen_at);
+      }
+      this.db.prepare(`DELETE FROM memberships WHERE agent_id = ?`).run(from.id);
+      this.db.prepare(`UPDATE claims SET agent_id = ? WHERE agent_id = ? AND released_at IS NULL`).run(into.id, from.id);
+      this.db.prepare(`UPDATE tasks SET owner_id = ? WHERE owner_id = ?`).run(into.id, from.id);
+      this.db.prepare(`UPDATE agents SET merged_into = ?, retired = 1 WHERE id = ?`).run(into.id, from.id);
+      this.db.exec('COMMIT');
+    } catch (e) { this.db.exec('ROLLBACK'); throw e; }
+    this.event('agent.merged', { agentId: from.id, data: { by: actor.name, from: from.name, into: into.name } });
+    this.emit('agents', {});
+    return { from: from.name, into: into.name };
+  }
 
   /** Get-or-create an *agent* identity. Never creates or returns the human. */
   ensureAgent(name, provider = null) {
     name = String(name || '').trim().toLowerCase();
     if (!/^[a-z0-9][a-z0-9._-]{0,39}$/.test(name)) throw new BoardError('bad_agent', `invalid agent name "${name}" (use a-z 0-9 . _ -)`);
-    const existing = this.getAgent(name);
+    let existing = this.getAgent(name);
     if (existing?.role === 'human') throw new BoardError('forbidden', `"${name}" is the human account; agents cannot act as the human`);
     if (existing?.provider === 'system' || name === SYSTEM_AGENT) throw new BoardError('forbidden', `"${name}" is reserved for the board's own system messages`);
+    if (existing?.merged_into) existing = this.canonical(existing);   // the human merged this name away
+    if (existing?.retired) this.db.prepare(`UPDATE agents SET retired = 0 WHERE id = ?`).run(existing.id);   // it is back
     if (existing) {
       this.db.prepare(`UPDATE agents SET last_seen_at = ?, provider = COALESCE(?, provider) WHERE id = ?`).run(now(), provider, existing.id);
-      return { ...existing, last_seen_at: now() };
+      return this.getAgent(existing.id);
     }
     this.db.prepare(`INSERT INTO agents (name, provider, role, created_at, last_seen_at) VALUES (?,?,'agent',?,?)`).run(name, provider, now(), now());
     const agent = this.getAgent(name);
@@ -116,8 +172,10 @@ export class Store {
   }
   members(projectId) {
     return this.db.prepare(`
-      SELECT a.id, a.name, a.provider, a.role, a.paused_reason, m.joined_at, m.last_seen_at, m.last_read_message_id
-      FROM memberships m JOIN agents a ON a.id = m.agent_id WHERE m.project_id = ? ORDER BY m.last_seen_at DESC`).all(projectId);
+      SELECT a.id, a.name, a.provider, a.role, a.paused_reason, a.retired, a.merged_into, mi.name AS merged_into_name,
+             m.joined_at, m.last_seen_at, m.last_read_message_id
+      FROM memberships m JOIN agents a ON a.id = m.agent_id LEFT JOIN agents mi ON mi.id = a.merged_into
+      WHERE m.project_id = ? AND a.retired = 0 AND a.merged_into IS NULL ORDER BY m.last_seen_at DESC`).all(projectId);
   }
 
   // ---------- threads ----------

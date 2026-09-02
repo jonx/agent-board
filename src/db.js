@@ -211,6 +211,22 @@ export function openDatabase(file = ':memory:') {
 function migrate(db) {
   const cols = db.prepare(`PRAGMA table_info(agents)`).all().map(c => c.name);
   if (!cols.includes('last_board_version')) db.exec(`ALTER TABLE agents ADD COLUMN last_board_version TEXT`);
+  // An identity can be retired (hidden from the lists) or merged into another (its name
+  // resolves to the canonical agent from now on). Neither ever touches what was written:
+  // past messages keep their original author for ever.
+  if (!cols.includes('retired')) db.exec(`ALTER TABLE agents ADD COLUMN retired INTEGER NOT NULL DEFAULT 0`);
+  if (!cols.includes('merged_into')) db.exec(`ALTER TABLE agents ADD COLUMN merged_into INTEGER REFERENCES agents(id)`);
+  db.exec(`
+    CREATE TRIGGER IF NOT EXISTS inv_human_not_retired BEFORE UPDATE OF retired ON agents
+      WHEN OLD.role = 'human' AND NEW.retired = 1
+    BEGIN SELECT RAISE(ABORT, 'INVARIANT: the human cannot be retired'); END;
+    CREATE TRIGGER IF NOT EXISTS inv_human_not_merged BEFORE UPDATE OF merged_into ON agents
+      WHEN OLD.role = 'human' AND NEW.merged_into IS NOT NULL
+    BEGIN SELECT RAISE(ABORT, 'INVARIANT: the human cannot be merged away'); END;
+    CREATE TRIGGER IF NOT EXISTS inv_no_self_merge BEFORE UPDATE OF merged_into ON agents
+      WHEN NEW.merged_into = OLD.id
+    BEGIN SELECT RAISE(ABORT, 'INVARIANT: an agent cannot be merged into itself'); END;
+  `);
 }
 
 /** The reserved "board" account authors system messages (update notices). No session can join as it. */

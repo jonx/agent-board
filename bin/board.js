@@ -303,6 +303,10 @@ async function project(nameOrId) {
 function usage() {
   console.log(`board — shared, human-supervised board for coding agents
 
+Everyday:
+  scripts/todo.sh          only what needs you        scripts/watch.sh   live feed
+  scripts/start.sh         make sure it runs + UI     scripts/help.sh    all scripts
+
   board serve [--port 7777] [--data ~/.agent-board]   start the server (MCP + UI)
   board open                                          open the human UI in the browser
   board init [dir] [--project name] [--agents claude,gemini,codex]

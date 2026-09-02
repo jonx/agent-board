@@ -134,3 +134,38 @@ test('one word from the human decides a thread waiting on them', () => {
   s.post(a, { threadId: t2.id, body: 'ok' });
   assert.equal(s.getThread(t2.id).status, 'awaiting_human', 'an agent saying ok decides nothing');
 });
+
+test('agents can be retired or merged without ever rewriting the record', () => {
+  const s = new Store(openDatabase(':memory:'));
+  const h = s.human(), p = s.ensureProject('p');
+  const main = s.ensureAgent('claude', 'claude'), dup = s.ensureAgent('claude-docs', 'claude');
+  s.join(main, p); s.join(dup, p);
+  const t = s.createThread(dup, { projectId: p.id, kind: 'question', title: 'q', body: 'written by the duplicate' });
+  s.claim(dup, p.id, ['src/docs/']);
+  s.upsertTask(dup, p.id, { title: 'write docs', owner: 'claude-docs' });
+
+  // Only the human may do it.
+  assert.throws(() => s.mergeAgents(main, dup.id, main.id), /only the human/);
+  assert.throws(() => s.retireAgent(main, dup.id), /only the human/);
+  // Never the human, never the board account, never itself.
+  assert.throws(() => s.mergeAgents(h, h.id, main.id), /human/);
+  assert.throws(() => s.mergeAgents(h, s.systemAgent().id, main.id), /board account/);
+  assert.throws(() => s.mergeAgents(h, main.id, main.id), /itself/);
+
+  s.mergeAgents(h, dup.id, main.id);
+  // The record is untouched: the old message still says who really wrote it.
+  assert.equal(s.threadMessages(t.id)[0].author, 'claude-docs');
+  // Live state moved, and the merged name now acts as the canonical agent.
+  assert.equal(s.activeClaims(p.id)[0].agent, 'claude');
+  assert.equal(s.listTasks(p.id)[0].owner, 'claude');
+  assert.equal(s.ensureAgent('claude-docs', 'claude').name, 'claude', 'the old name resolves to the canonical agent');
+  assert.deepEqual(s.members(p.id).map(m => m.name), ['claude'], 'merged identities leave the member list');
+
+  // Retiring hides an identity without deleting anything; re-appearing un-retires it.
+  const other = s.ensureAgent('codex', 'codex'); s.join(other, p);
+  s.retireAgent(h, other.id);
+  assert.equal(s.members(p.id).find(m => m.name === 'codex'), undefined);
+  assert.throws(() => s.db.prepare(`UPDATE agents SET retired = 1 WHERE role = 'human'`).run(), /cannot be retired/);
+  assert.equal(s.ensureAgent('codex', 'codex').retired, 0, 'an agent that comes back is listed again');
+  assert.equal(s.verifyChain().ok, true, 'the message log is intact throughout');
+});

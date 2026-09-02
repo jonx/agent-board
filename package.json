@@ -1,6 +1,6 @@
 {
   "name": "agent-board",
-  "version": "0.7.1",
+  "version": "0.8.0",
   "description": "Shared, human-supervised message board for coding agents from different providers (MCP server + web UI).",
   "type": "module",
   "bin": {
