@@ -10,18 +10,28 @@ import { buildMcpServer, CONTEXT_THREAD_TITLE } from './mcp.js';
 import { attentionOf } from './store.js';
 import { BoardError } from './store.js';
 
-/** Live MCP sessions: which session holds which agent name. A name is "live" while its
- *  session made a request in the last SESSION_TTL ms; after that another session may take it. */
+/** Live MCP sessions, used for display only (the human's green dots) and to warn a session
+ *  that a name was in recent use. A name is NEVER a lock: a dropped session must never keep
+ *  its owner out — restarts and network drops leave ghosts, and being locked out of your own
+ *  identity is far worse than two sessions sharing a name. */
 export class SessionRegistry {
-  constructor(ttlMs = 10 * 60_000) { this.ttl = ttlMs; this.sessions = new Map(); }
+  constructor(ttlMs = 5 * 60_000) { this.ttl = ttlMs; this.sessions = new Map(); }
   add(id, entry) { this.sessions.set(id, { ...entry, agentName: null, lastSeen: Date.now() }); }
   get(id) { return this.sessions.get(id); }
   touch(id) { const e = this.sessions.get(id); if (e) e.lastSeen = Date.now(); }
   remove(id) { this.sessions.delete(id); }
   bind(id, agentName) { const e = this.sessions.get(id); if (e) e.agentName = agentName; }
+  /** Session id of a *recently active* session bound to that name, or null. Informational. */
   holder(agentName) {
-    for (const [id, e] of this.sessions) if (e.agentName === agentName && Date.now() - e.lastSeen < this.ttl) return id;
-    return null;
+    let best = null;
+    for (const [id, e] of this.sessions) if (e.agentName === agentName && Date.now() - e.lastSeen < this.ttl) {
+      if (!best || e.lastSeen >= this.sessions.get(best).lastSeen) best = id;  // ties: the newest wins
+    }
+    return best;
+  }
+  secondsSince(agentName) {
+    const id = this.holder(agentName);
+    return id ? Math.round((Date.now() - this.sessions.get(id).lastSeen) / 1000) : null;
   }
   sweep() { for (const [id, e] of this.sessions) if (Date.now() - e.lastSeen > this.ttl * 6) { e.transport?.close?.(); this.sessions.delete(id); } }
 }
@@ -62,7 +72,7 @@ export function createHttpServer({ store, humanToken, uiFile, registry = new Ses
       registry.touch(sid);
       return existing.transport.handleRequest(req, res, body);
     }
-    if (sid && !existing) return json(res, 404, { error: 'session_not_found', message: 'session expired or server restarted — re-initialize and board_join again' });
+    if (sid && !existing) return json(res, 404, { error: 'session_not_found', message: 'this MCP session no longer exists (the board restarted, or the connection dropped). Re-initialize the connection (Claude Code: /mcp) and call board_join again with the SAME name as before — names are never locked, you always get your own identity back.' });
     if (req.method !== 'POST') return json(res, 405, { error: 'method', message: 'initialize first (POST)' });
     if (!/^[a-z0-9][a-z0-9._-]{0,39}$/.test(provider)) return json(res, 400, { error: 'bad_provider', message: 'provider must be like claude, codex, gemini' });
     let project;
@@ -74,6 +84,7 @@ export function createHttpServer({ store, humanToken, uiFile, registry = new Ses
       onsessioninitialized: (id) => { ctx.sessionId = id; registry.add(id, { transport, projectName, provider }); },
     });
     transport.onclose = () => { if (ctx.sessionId) registry.remove(ctx.sessionId); };
+    transport.onerror = () => { if (ctx.sessionId) registry.remove(ctx.sessionId); };
     const server = buildMcpServer(store, ctx);
     await server.connect(transport);
     await transport.handleRequest(req, res, body);

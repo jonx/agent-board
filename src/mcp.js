@@ -84,17 +84,22 @@ export function buildMcpServer(store, ctx) {
     () => ({ this_connection: project.name, projects: projectList() }), { open: true });
 
   reg('board_join',
-    `First call of every session. Choose the agent name you will be known by on this project (lowercase, e.g. "${ctx.provider}", "${ctx.provider}-2", "${ctx.provider}-auth"). Your provider is fixed by the connection (${ctx.provider}). A name held by another live session is refused — pick another. Reusing your own previous name resumes its journal, claims and inbox.`,
+    `First call of every session, and after any reconnect. Choose the agent name you will be known by on this project (lowercase, e.g. "${ctx.provider}", "${ctx.provider}-2", "${ctx.provider}-auth"). Your provider is fixed by the connection (${ctx.provider}). Reusing your previous name always works and gives you back your journal, claims and inbox — names are never locked, so a restart or a dropped connection can never keep you out of your own identity. You only get a note if another session used the name moments ago.`,
     { name: z.string().min(1).max(40).describe('your agent name for this session'), project_path: z.string().optional().describe('absolute path of the project root, registers it if unknown') },
     ({ name, project_path }) => {
       name = String(name).trim().toLowerCase();
       const existing = store.getAgent(name);
       if (existing?.provider === 'system') throw new BoardError('forbidden', `"${name}" is reserved for the board's own system messages`, { suggestion: suggestName() });
       if (existing && existing.role !== 'human' && existing.provider && existing.provider !== ctx.provider) throw new BoardError('name_taken', `"${name}" belongs to provider ${existing.provider}; choose a name for ${ctx.provider}`, { suggestion: suggestName() });
-      const holder = ctx.registry.holder(name);
-      if (holder && holder !== ctx.sessionId) throw new BoardError('name_in_use', `"${name}" is used by another live session right now; pick another name`, { suggestion: suggestName() });
       agent = store.ensureAgent(name, ctx.provider);
       const warnings = [];
+      // A name is a label, never a lock: a dropped or restarted session must never keep its
+      // owner out. We only mention a recent other session, and let the agent judge.
+      const holder = ctx.registry.holder(name);
+      if (holder && holder !== ctx.sessionId) {
+        const secs = ctx.registry.secondsSince(name);
+        warnings.push(`NOTE: another session used the name "${name}" ${secs}s ago. If that was you (a reconnect after a restart or a dropped connection), ignore this — you have your identity, journal and claims back. If another agent of the same provider is genuinely running right now, one of you should re-join as "${suggestName()}" to avoid sharing an inbox.`);
+      }
       if (project_path) {
         const other = store.listProjects().find(p => p.id !== pid && p.path && samePath(p.path, project_path));
         if (other) warnings.push(`WARNING: the path ${project_path} is already registered as project "${other.name}". You are connected to "${project.name}" — probably a naming mismatch. Do not work in two projects for one repo: tell the human, or reconnect to "${other.name}".`);

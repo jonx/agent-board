@@ -33,7 +33,9 @@ test('two providers coordinate through the board with the human watching', async
   const pre = await anon.call('board_status');
   assert.equal(pre.joined, false); assert.match(pre.how, /claude-2/);
   await assert.rejects(anon.call('board_inbox'), /board_join first/);
-  await assert.rejects(anon.call('board_join', { name: 'claude' }), /another live session/);
+  const takeover = await anon.call('board_join', { name: 'claude' });   // never locked out of a name
+  assert.equal(takeover.joined, true);
+  assert.match(takeover.warnings.join(' '), /another session used the name/);
   await assert.rejects(anon.call('board_join', { name: 'codex' }), /belongs to provider codex/);
   await assert.rejects(anon.call('board_join', { name: 'human' }), /human account/);
   await anon.call('board_join', { name: 'claude-2' });

@@ -11,6 +11,19 @@ test('human-in-the-loop invariants hold', () => {
   assert.ok(r.ok);
 });
 
+test('a name is a label, never a lock', async () => {
+  // A dropped or restarted session must never keep its owner out of its own identity.
+  const { SessionRegistry } = await import('../src/http.js');
+  const r = new SessionRegistry(60_000);
+  r.add('ghost', {}); r.bind('ghost', 'claude');
+  assert.equal(r.holder('claude'), 'ghost', 'a recent session is reported...');
+  r.add('real', {}); r.bind('real', 'claude');
+  assert.equal(r.holder('claude'), 'real', '...and the newest one wins for display');
+  assert.equal(typeof r.secondsSince('claude'), 'number');
+  r.remove('real'); r.remove('ghost');
+  assert.equal(r.holder('claude'), null);
+});
+
 test('no blocking primitive on the agent surface', () => {
   // Agents must never sit waiting for each other: the board is a mailbox, not a channel.
   for (const name of TOOL_NAMES) assert.doesNotMatch(name, /wait|block|poll|sleep/i, `tool ${name} invites idling`);
