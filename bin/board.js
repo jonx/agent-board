@@ -39,6 +39,28 @@ switch (cmd) {
     break;
   }
 
+  case 'run': {
+    const { runWorker } = await import('../src/runner.js');
+    const config=JSON.parse(readFileSync(resolve(pos[0] ?? 'board.runners.json'),'utf8'));
+    await runWorker({base:BASE,token:token(),config,once:rest.includes('--once')});
+    break;
+  }
+  case 'skills': {
+    const p=await project(pos[0]);
+    console.log(JSON.stringify(await api(`/api/projects/${p.id}/skills${pos[1]?'/'+encodeURIComponent(pos[1]):''}`),null,2));
+    break;
+  }
+  case 'notifications': {
+    const p=pos[0]?await project(pos[0]):null;
+    console.log(JSON.stringify(await api('/api/notifications?agent=human'+(p?'&project_id='+p.id:'')),null,2));
+    break;
+  }
+  case 'delegate': {
+    const p=await project(pos[0]);
+    const task=JSON.parse(pos[1]??'{}');
+    console.log(JSON.stringify(await api(`/api/projects/${p.id}/delegate`,task),null,2));
+    break;
+  }
   case 'projects':
     for (const p of await api('/api/projects')) console.log(`${p.id}\t${p.name}\t${p.awaiting_human ? `⚠ ${p.awaiting_human} waiting` : ''}\t${p.open_threads} active\t${p.path ?? ''}`);
     break;
@@ -157,9 +179,9 @@ switch (cmd) {
         const hook = { type: 'command', command: `sh "$CLAUDE_PROJECT_DIR"/.claude/board-inbox.sh ${name}` };
         writeJson(join(dir, '.claude', 'settings.json'), j => {
           j.hooks ??= {};
-          for (const ev of ['SessionStart', 'UserPromptSubmit']) {
+          for (const ev of ['SessionStart', 'UserPromptSubmit', 'PostToolUse']) {
             j.hooks[ev] = (j.hooks[ev] ?? []).filter(g => !g.hooks?.some(h => h.command?.includes('board-inbox.sh')));
-            j.hooks[ev].push({ hooks: [hook] });
+            j.hooks[ev].push({ ...(ev==='PostToolUse'?{matcher:'*'}:{}), hooks: [hook] });
           }
         });
         addPrompt(join(dir, 'CLAUDE.md'), 'claude');
@@ -177,7 +199,7 @@ switch (cmd) {
     }
     console.log(`Done. An agent can use the board immediately, acting as its provider name; board_join only changes the label.
 To pin a fixed identity that survives every reconnect, append it to the URL: .../mcp/${name}/claude/<agent-name>.
-Claude Code asks once to trust the project's .mcp.json. Hooks need curl. Re-run to update. Keep the server always on: board service install`);
+Claude Code asks once to trust the project's .mcp.json. Hooks use Node. Re-run to update. Keep the server always on: board service install`);
     break;
   }
 
@@ -319,6 +341,10 @@ Everyday:
                                                       decide a thread waiting on you, in one word
   board post <thread_id> "text" [--verdict approve|request_changes|reject]
   board ask <project> "title" "body" [--critical]
+  board delegate <project> '{"to":"agent","title":"…","description":"…","criteria":"…"}'
+  board skills <project> [name]                       discover or read project skills
+  board notifications [project]                      human notifications, including skill changes
+  board run <config.json> [--once]                    dispatch configured agent commands on notifications
   board tail [project]                                live stream of everything said
   board as <project> <name> <tool> ['{json}']         act as an agent without MCP (e.g. board as app claude board_inbox); --create for a new project
   board announce "text"                               system message in every project (e.g. before maintenance)

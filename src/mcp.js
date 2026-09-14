@@ -5,6 +5,7 @@
 // Every tool here acts *as an agent*: nothing on this surface can approve a gated
 // decision, pause anyone, or touch the human account (test/invariants.test.js checks the names).
 
+import { registerCollaborationTools } from './collaboration-mcp.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { BoardError } from './store.js';
@@ -14,23 +15,20 @@ import { VERSION, changelogSince } from './changelog.js';
 export const TOOL_NAMES = [
   'board_projects', 'board_join', 'board_status', 'board_inbox', 'board_threads', 'board_read', 'board_post',
   'board_ack', 'board_ask', 'board_request_review', 'board_propose_board_change', 'board_resolve', 'board_archive',
+  'board_delegate', 'board_task_update', 'board_task_transfer', 'board_checkpoint', 'board_notifications', 'board_receive', 'board_skills', 'board_skill_read', 'board_skill_write', 'board_skill_feedback',
   'board_journal', 'board_context', 'board_tasks', 'board_task', 'board_claim', 'board_release',
 ];
 
 export const CONTEXT_THREAD_TITLE = 'Project context';
 
 const PROTOCOL = [
-  'THE BOARD IS ASYNCHRONOUS, LIKE A MAILBOX. You post; the others read it whenever they next work. Never wait for another agent, never ask whether they are connected: it is irrelevant and you cannot know. Post, then get on with something else.',
-  'You share this board with other agents (possibly other providers) and with the human, who reads everything.',
-  '1. Start: board_join (pick your name), board_status, then board_inbox. Deal with what is on your plate (waiting_on_you) before starting anything new. If "Project context" is empty or stale, write it with board_context.',
-  '2. While working: board_claim the paths you edit; board_journal at each milestone (what you did, what is next, what is uncertain).',
-  '3. Settle questions between agents; escalate to the human (board_ask critical=true) only for genuinely irreversible choices, formatted so they can answer "ok".',
-  '4. Asked something you cannot answer right away? board_ack "working" (or "declined"), then answer when you get to it. Asked something you CAN answer? Answer now: an unanswered question stalls someone else.',
-  '5. When a step is done: board_request_review; act on verdicts. Post the request and carry on with other work: do not sit on it.',
-  '6. Blocked on someone else\'s answer: mark the task blocked (board_task), say so in board_journal, and switch to other work. If there is nothing else, write a handoff journal and end your turn: do not idle, do not re-ask, do not ping.',
-  '7. When a thread has served its purpose and the work is really done: board_archive with an account of what you did and how you checked it. That is your own verification step, not tidying up.',
-  '8. Before finishing: board_journal a handoff note, board_release your claims, update board_context if the picture changed.',
-  'Everything you post is public to the whole project. There are no private messages.',
+  'Start with board_status and board_inbox. Use a stable, distinct agent name.',
+  'Delegate via board_delegate with acceptance criteria; continue independent work. Result notifications persist until board_receive.',
+  'Check attention between steps. Accept offered tasks with board_task_update; use the returned version for subsequent updates. Finish with a verified result.',
+  'If all work depends on others, publish a handoff and end this execution. A configured runner can start a follow-up when results arrive. Never poll in a loop.',
+  'Claim edited paths, use separate worktrees for concurrent edits, and checkpoint milestones. Human instructions and pauses take precedence.',
+  'Discover short reusable skills with board_skills; read only relevant skills. Improve them from evidence via board_skill_write; changes notify the human automatically.',
+  'Everything stays public. Only the human can approve gated decisions or board changes. Routine skill edits need no separate approval.',
 ];
 
 function samePath(a, b) { const n = (x) => String(x).replace(/\/+$/, ''); return n(a) === n(b); }
@@ -40,7 +38,13 @@ function fail(e) {
   const payload = e instanceof BoardError ? { error: e.code, message: e.message, ...e.extra } : { error: 'internal', message: String(e?.message ?? e) };
   return { isError: true, content: [{ type: 'text', text: JSON.stringify(payload, null, 2) }] };
 }
-const wrap = (fn) => async (args) => { try { return ok(await fn(args ?? {})); } catch (e) { return fail(e); } };
+const wrap = (fn, attention = () => null) => async (args) => {
+  try {
+    const data = await fn(args ?? {}), result = ok(data);
+    if (Array.isArray(data)) { const a = attention(); if (a) result.content.push({type:'text',text:JSON.stringify({attention:a})}); }
+    return result;
+  } catch (e) { return fail(e); }
+};
 
 /**
  * ctx = { project, provider, sessionId, agent: null|row, registry }
@@ -70,9 +74,9 @@ export function buildMcpServer(store, ctx) {
     server.registerTool(name, { description, inputSchema }, wrap((args) => {
       if (!open) needAgent();
       const out = fn(args);
-      const attach = (v) => { if (pendingNote && v && typeof v === 'object' && !Array.isArray(v)) { v = { ...v, note: pendingNote }; pendingNote = null; } return v; };
+      const attach = (v) => { if (agent && v && typeof v === 'object' && !Array.isArray(v) && !['board_notifications','board_receive'].includes(name)) v = {...v, attention: store.attention(agent,pid)}; if (pendingNote && v && typeof v === 'object' && !Array.isArray(v)) { v = { ...v, note: pendingNote }; pendingNote = null; } return v; };
       return out instanceof Promise ? out.then(attach) : attach(out);
-    }));
+    }, () => agent ? store.attention(agent,pid) : null));
   const summary = (t) => {
     const acks = store.threadAcks(t.id);
     return { id: t.id, kind: t.kind, title: t.title, status: t.status, ...(t.archived_at ? { archived_at: t.archived_at } : {}), needs_human: !!t.needs_human, paused: t.paused_reason ?? null, by: t.created_by_name, ref: t.ref ?? undefined, messages: t.message_count, updated_at: t.updated_at,
@@ -135,7 +139,7 @@ export function buildMcpServer(store, ctx) {
     }, { open: true });
 
   reg('board_status',
-    `Your entry point (no board_join needed: an unjoined session acts as "${ctx.forcedName ?? ctx.provider}"). Returns the project brief (latest "Project context"), who is on the project, recent journal entries, active path claims, tasks in progress, what other agents are waiting on from YOU (waiting_on_you), the asks of yours nobody has answered yet, and your unread count. Before joining it only tells you how to join.`,
+    `Your entry point (no board_join needed: an unjoined session acts as "${ctx.forcedName ?? ctx.provider}"). Returns the project brief (latest "Project context"), who is on the project, recent journal entries, active path claims, tasks in progress, what other agents are waiting on from YOU (waiting_on_you), the asks of yours nobody has answered yet, and your unread count. Skills are available through board_skills; delegated tasks through board_tasks.`,
     { project_path: z.string().optional().describe('Absolute path of the project root, to register it if unknown') },
     ({ project_path }) => {
       if (project_path) store.ensureProject(project.name, project_path, agent);
@@ -159,7 +163,7 @@ export function buildMcpServer(store, ctx) {
     });
 
   reg('board_inbox',
-    'Unread messages in this project (from every agent and the human), grouped by thread. Marks them read unless peek=true. Messages from the human and threads mentioning you come first. Call it between work steps: it is how the board reaches you; there is no push and nothing to wait for.',
+    'Unread messages in this project (from every agent and the human), grouped by thread. Marks them read unless peek=true. Messages from the human and threads mentioning you come first. Call it between work steps: also check durable targeted notifications in attention or board_notifications. Continue independent work after delegating.',
     { peek: z.boolean().optional(), limit: z.number().int().min(1).max(500).optional() },
     ({ peek = false, limit = 100 }) => {
       const r = store.inbox(agent, pid, { peek, limit });
@@ -177,7 +181,10 @@ export function buildMcpServer(store, ctx) {
       const t = store.getThread(thread_id);
       if (!t || t.project_id !== pid) throw new BoardError('not_found', 'thread not found in this project');
       const messages = store.threadMessages(thread_id, since_id);
-      if (messages.length) store.markRead(agent, pid, Math.max(...messages.map(m => m.id)) );
+      if (messages.length) {
+        if (!since_id) store.markThreadRead(agent, thread_id, Math.max(...messages.map(m => m.id)));
+        else {store.markThreadRead(agent,thread_id,0);for(const m of messages) store.db.prepare('INSERT OR IGNORE INTO message_reads(agent_id,message_id) VALUES (?,?)').run(agent.id,m.id);}
+      }
       const last = store.db.prepare(`SELECT max(id) AS id FROM messages WHERE thread_id = ?`).get(thread_id).id;
       return { thread: summary(t), messages, acks: store.threadAcks(thread_id),
         last_message_read_by: last ? store.readReceipts(pid, last, agent.id) : [] };
@@ -252,7 +259,7 @@ export function buildMcpServer(store, ctx) {
     });
 
   reg('board_tasks', 'List tasks of this project.', { status: z.enum(TASK_STATUSES).optional() },
-    ({ status }) => store.listTasks(pid, status).map(t => ({ id: t.id, title: t.title, status: t.status, owner: t.owner, thread_id: t.thread_id, description: t.description })));
+    ({ status }) => { const details=new Map(store.delegatedTasks(pid).map(t=>[t.id,t])); return store.listTasks(pid,status).map(t=>({...t,...details.get(t.id)})); });
 
   reg('board_task', 'Create a task (omit id) or update one (with id). Use owner="me" to take it. Keep the task list truthful: it is how parallel agents avoid doing the same work.',
     { id: z.number().int().optional(), title: z.string().optional(), description: z.string().optional(), status: z.enum(TASK_STATUSES).optional(), owner: z.string().optional().describe('"me" or an agent name'), thread_id: z.number().int().optional() },
@@ -267,5 +274,6 @@ export function buildMcpServer(store, ctx) {
     { paths: z.array(z.string()).optional() },
     ({ paths }) => { store.release(agent, pid, paths); return { released: paths ?? 'all' }; });
 
+  registerCollaborationTools({reg, store, pid, agent: () => needAgent()});
   return server;
 }

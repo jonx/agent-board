@@ -3,6 +3,7 @@
 // so it holds no matter which code path (MCP, HTTP, CLI, a future feature) writes.
 // See INVARIANTS.md. test/invariants.test.js and the startup self-check verify them.
 
+import { migrateCollaboration } from './collaboration-schema.js';
 import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
@@ -202,6 +203,7 @@ export function openDatabase(file = ':memory:') {
   const db = new DatabaseSync(file);
   db.exec(SCHEMA);
   migrate(db);
+  migrateCollaboration(db);
   ensureHuman(db);
   ensureSystemAgent(db);
   return db;

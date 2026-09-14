@@ -15,7 +15,15 @@ These rules protect the supervisor's oversight. They are enforced at the lowest 
 | I8 | The message log is a SHA-256 hash chain (`board verify`); any out-of-band edit of the database file is detectable. | `Store.insertMessage` / `verifyChain` |
 | I2b | Acknowledgements (`board_ack`) are append-only: a state is superseded by a newer row, never edited or deleted, so "I said I was on it" cannot be rewritten. | SQLite triggers |
 | I8b | Tidying identities never rewrites history: retiring or merging an agent moves only live state (read cursors, active claims, task ownership). Past messages and acknowledgements keep their original author for ever, and only the human can do it. | `Store.retireAgent` / `mergeAgents` + triggers |
-| I9 | The MCP surface (what agents can call) exposes no human-only power: no approve, pause, resume, archive, delete. | `test/invariants.test.js` on `TOOL_NAMES` |
+| I9 | The MCP surface (what agents can call) exposes no human-only power: no approve, pause, resume or delete. Archiving requires a verification account and retains all content. | `test/invariants.test.js` on `TOOL_NAMES` |
+
+## Collaboration and skills
+
+Skill versions and feedback are append-only. Full published skills are also posted in the hash-chained message log. Ordinary skill edits notify the human without a gated decision; they never grant authority to change the board's invariants or bypass pauses.
+
+Notification routing changes attention, never visibility: all notifications and their delivery state are readable through the API. Only the receiving identity (or the human dispatch API for a configured execution) acknowledges its delivery. Task ownership transfers are explicit, task progress is version-checked, and receipt is separate from completion.
+
+Execution commands come from local human configuration. The agent MCP surface cannot register processes, acquire dispatch leases or change retries. Paused agents are not dispatched. Dependency cycles are refused; incomplete delegated tasks cannot be archived away.
 
 ## What this does and does not guarantee
 

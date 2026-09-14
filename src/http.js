@@ -116,6 +116,7 @@ export function createHttpServer({ store, humanToken, uiFile, registry = new Ses
 
     // ---- reads ----
     if (req.method === 'GET') {
+      if (p === '/api/notifications') return json(res,200,store.db.prepare(`SELECT n.*,a.name AS agent,d.received_at,d.attempts,d.last_error FROM notifications n JOIN deliveries d ON d.notification_id=n.id JOIN agents a ON a.id=d.agent_id WHERE (? IS NULL OR n.project_id=?) AND (? IS NULL OR a.name=?) AND (?=1 OR d.received_at IS NULL) ORDER BY n.priority DESC,n.id DESC LIMIT 200`).all(q.get('project_id'),q.get('project_id'),q.get('agent'),q.get('agent'),q.get('all')==='1'?1:0));
       if (p === '/api/projects') return json(res, 200, store.listProjects());
       if (p === '/api/agents') return json(res, 200, store.listAgents());
       if (p === '/api/threads-index') return json(res, 200, store.threadsIndex());
@@ -141,11 +142,15 @@ export function createHttpServer({ store, humanToken, uiFile, registry = new Ses
         if (!a || !pr) return json(res, 404, { error: 'not_found' });
         return json(res, 200, store.inbox(a, pr.id, { peek: true, limit: Number(q.get('limit') ?? 50) }));
       }
+      if (seg[0] === 'projects' && seg[2] === 'skills') {
+        const pid=id(seg[1]);
+        return json(res,200,seg[3]?store.readSkill(pid,seg[3],q.has('version')?id(q.get('version')):undefined):store.listSkills(pid));
+      }
       if (seg[0] === 'projects' && seg[1] && !seg[2]) {
         const pr = store.getProject(id(seg[1])); if (!pr) return json(res, 404, { error: 'not_found' });
         const ctx = store.db.prepare(`SELECT id FROM threads WHERE project_id = ? AND kind='status' AND title = ?`).get(pr.id, CONTEXT_THREAD_TITLE);
         const ctxMsgs = ctx ? store.threadMessages(ctx.id) : [];
-        return json(res, 200, { project: pr, members: store.members(pr.id).map(m => ({ ...m, live: !!registry.holder(m.name) })), tasks: store.listTasks(pr.id), claims: store.activeClaims(pr.id), context: ctxMsgs[ctxMsgs.length - 1] ?? null, context_thread_id: ctx?.id ?? null });
+        return json(res, 200, { project: pr, members: store.members(pr.id).map(m => ({ ...m, live: !!registry.holder(m.name) })), tasks: store.listTasks(pr.id).map(t=>({...t,...store.delegatedTasks(pr.id).find(d=>d.id===t.id)})), skills:store.listSkills(pr.id), notifications:store.notifications(human,pr.id), claims: store.activeClaims(pr.id), context: ctxMsgs[ctxMsgs.length - 1] ?? null, context_thread_id: ctx?.id ?? null });
       }
       if (seg[0] === 'projects' && seg[2] === 'activity') {
         const pr = store.getProject(/^\d+$/.test(seg[1]) ? id(seg[1]) : seg[1]); if (!pr) return json(res, 404, { error: 'not_found' });
@@ -153,7 +158,9 @@ export function createHttpServer({ store, humanToken, uiFile, registry = new Ses
       }
       if (seg[0] === 'projects' && seg[2] === 'messages') { // feed: /api/projects/<id|name>/messages?since=ID
         const pr = store.getProject(/^\d+$/.test(seg[1]) ? id(seg[1]) : seg[1]); if (!pr) return json(res, 404, { error: 'not_found' });
-        return json(res, 200, { last_id: store.db.prepare('SELECT COALESCE(max(id),0) AS n FROM messages WHERE project_id = ?').get(pr.id).n, messages: store.messagesSince(pr.id, Number(q.get('since') ?? 0), Number(q.get('limit') ?? 50)) });
+        const since=Math.max(0,Number(q.get('since'))||0), limit=Math.max(1,Math.min(200,Number(q.get('limit'))||50));
+        const messages=store.messagesSince(pr.id,since,limit+1), truncated=messages.length>limit; if(truncated) messages.pop();
+        return json(res,200,{last_id:messages.at(-1)?.id??since,truncated,messages});
       }
       if (seg[0] === 'projects' && seg[2] === 'threads') {
         const list = store.listThreads(id(seg[1]), { status: q.get('status') || null, kind: q.get('kind') || null, limit: Number(q.get('limit') ?? 100) });
@@ -173,6 +180,14 @@ export function createHttpServer({ store, humanToken, uiFile, registry = new Ses
     // ---- writes: human only ----
     if (req.method !== 'POST') return json(res, 405, { error: 'method' });
     const actor = requireHuman(req);
+    if (seg[0]==='projects' && seg[2]==='delegate') return json(res,200,store.delegate(actor,id(seg[1]),body));
+    if (seg[0]==='projects' && seg[2]==='task-update') return json(res,200,store.updateDelegatedTask(actor,id(seg[1]),body));
+    if (seg[0]==='projects' && seg[2]==='task-transfer') return json(res,200,store.transferTask(actor,id(seg[1]),body));
+    if (seg[0]==='projects' && seg[2]==='skills') return json(res,200,store.writeSkill(actor,id(seg[1]),body));
+    if (seg[0]==='projects' && seg[2]==='receive') return json(res,200,store.receiveNotifications(actor,id(seg[1]),body.ids));
+    if (seg[0]==='projects' && seg[2]==='dispatch') return json(res,200,store.reserveDelivery(actor,id(seg[1]),body.agent,{seconds:body.seconds,max_runs_per_hour:body.max_runs_per_hour}));
+    if (seg[0]==='projects' && seg[2]==='dispatch-finish') return json(res,200,store.finishDelivery(actor,id(seg[1]),body));
+
     if (p === '/api/projects') return json(res, 200, store.ensureProject(body.name, body.path ?? null, actor));
     if (p === '/api/announce') { if (!body.body?.trim()) throw new BoardError('bad_input', 'body required'); return json(res, 200, store.announceAll(body.body)); }
     if (seg[0] === 'projects' && seg[2] === 'archive') { store.archiveProject(actor, id(seg[1]), body.archived !== false); return json(res, 200, { ok: true }); }

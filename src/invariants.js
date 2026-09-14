@@ -112,6 +112,15 @@ export function runInvariantChecks() {
     s.pauseAgent(human, a2.id, null);
     if (!threw) throw new Error('paused agent acknowledged');
   });
+  check('skill edits are versioned and notify the human', () => {
+    const skill = s.writeSkill(a1,p.id,{name:'review',description:'Review changes',body:'Check callers.',reason:'Observed regression',expected_version:0});
+    if(skill.version!==1 || s.getThread(skill.thread_id).needs_human) throw new Error('ordinary skill edit incorrectly gated');
+    if(!s.notifications(human,p.id).some(n=>n.kind==='skill.updated')) throw new Error('human was not notified');
+  });
+  mustThrow('skill history no update', () => db.exec("UPDATE skill_versions SET body='rewritten'"), /append-only/);
+  mustThrow('skill history no delete', () => db.exec('DELETE FROM skill_versions'), /append-only/);
+  mustThrow('notification history no delete', () => db.exec('DELETE FROM notifications'), /append-only/);
+  mustThrow('agent cannot dispatch a process', () => s.reserveDelivery(a1,p.id,'beta'), /only the human/);
   // I8. Hash chain intact.
   check('hash chain', () => { const v = s.verifyChain(); if (!v.ok) throw new Error(`broken at ${v.broken_at}`); });
 

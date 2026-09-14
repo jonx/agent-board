@@ -1,7 +1,36 @@
 {
   "_comment": "What `board init` merges into <project>/.claude/settings.json (PROJECT replaced). Prefer `board init`.",
   "hooks": {
-    "SessionStart": [{ "hooks": [{ "type": "command", "command": "sh \"$CLAUDE_PROJECT_DIR\"/.claude/board-inbox.sh PROJECT" }] }],
-    "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "sh \"$CLAUDE_PROJECT_DIR\"/.claude/board-inbox.sh PROJECT" }] }]
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"$CLAUDE_PROJECT_DIR\"/.claude/board-inbox.sh PROJECT"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"$CLAUDE_PROJECT_DIR\"/.claude/board-inbox.sh PROJECT"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"$CLAUDE_PROJECT_DIR\"/.claude/board-inbox.sh PROJECT"
+          }
+        ]
+      }
+    ]
   }
 }

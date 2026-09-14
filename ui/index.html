@@ -205,13 +205,14 @@ try { S.filter = localStorage.getItem('board_filter') || 'attention'; } catch {}
 const BOOT = parseHash(bootHash || location.hash.slice(1));
 
 async function loadProjects() {
-  const [projects, agents, index] = await Promise.all([api('/api/projects'), api('/api/agents'), api('/api/threads-index')]);
+  const [projects, agents, index, notices] = await Promise.all([api('/api/projects'), api('/api/agents'), api('/api/threads-index'), api('/api/notifications?agent=human')]);
   S.projects = projects; S.agents = agents;
   // Server decides what is unread (same answer for the UI, the CLI and the scripts).
   S.unreadByProject = {};
   S.unreadThreads = new Set(index.filter(isUnread).map(t => t.id));
   S.readById = new Map(index.map(t => [t.id, t.human_read_id ?? 0]));
   for (const t of index) if (isUnread(t)) S.unreadByProject[t.project_id] = (S.unreadByProject[t.project_id] ?? 0) + 1;
+  for (const n of notices) S.unreadByProject[n.project_id]=(S.unreadByProject[n.project_id]??0)+1;
   const el = $('#projects'), asideTop = el.scrollTop;
   const html = S.projects.map(p => {
     const n = S.unreadByProject[p.id] ?? 0;
@@ -279,7 +280,7 @@ async function loadThreads() {
   const lists = { attention: live.filter(needsMe), active: all.filter(t => ACTIVE.has(t.status) || t.archived_at), all };
   for (const b of document.querySelectorAll('.tabs button')) {
     const f = b.dataset.f, label = b.dataset.label ?? (b.dataset.label = b.textContent.trim());
-    const n = f === 'attention' ? lists.attention.filter(unread).length : 0;   // only this tab ever badges
+    const n = f === 'attention' ? lists.attention.filter(unread).length + detail.notifications.length : 0;   // only this tab ever badges
     b.innerHTML = label + (n ? `<span class="n">${n}</span>` : '');
     b.title = n ? `${n} thread(s) waiting on you` : '';
   }
@@ -289,13 +290,13 @@ async function loadThreads() {
   const can = !!token;
   const list = lists[S.filter];
   S.threads = list;
-  const html = list.map(t => `<div class="item${t.archived_at ? ' arch' : ''}" data-id="${t.id}">
+  const html = (S.filter === 'attention' ? notificationCards(detail.notifications) : '') + (list.map(t => `<div class="item${t.archived_at ? ' arch' : ''}" data-id="${t.id}">
       <div class="t"><span class="badge k">${t.kind}</span><span class="title" title="${esc(t.title)}">${esc(t.title)}</span></div>
       <div class="m">${t.archived_at ? '<span class="badge" title="Archived: the work was done and accounted for. Still readable, and it can be reopened.">archived</span>' : ''}<span class="badge ${t.status}">${t.status.replace('_', ' ')}</span>${t.paused_reason ? '<span class="badge paused">paused</span>' : ''}<span>${t.message_count} msg</span><span>${fmt(t.last_at ?? t.updated_at)}</span></div>
       ${t.last_body ? `<div class="preview"><b>${esc(t.last_author ?? '')}:</b> ${esc(oneLine(t.last_body))}</div>` : ''}
       ${t.acks?.length ? `<div class="acks">${ackChips(t.acks)}</div>` : ''}
       ${can && t.status === 'awaiting_human' ? `<div class="decide" data-for="${t.id}"><input class="why" placeholder="optional note" title="Optional: a word for the agents, posted with your decision."><button class="ok" data-d="approve" title="Approve without opening the thread; the agents may proceed.">ok</button><button class="bad" data-d="reject" title="Refuse without opening the thread; the agents must not proceed.">non</button></div>` : ''}</div>`).join('')
-    || `<div class="empty">${S.filter === 'attention' ? 'Nothing needs you right now.' : 'No threads.'}</div>`;
+    || `<div class="empty">${S.filter === 'attention' ? 'Nothing needs you right now.' : 'No threads.'}</div>`);
   // Re-rendering under the cursor swallows clicks, so only touch the DOM when something changed.
   const el = $('#threads');
   if (el.dataset.sig !== html) { el.dataset.sig = html; el.innerHTML = html; restore(); }
@@ -313,7 +314,19 @@ function paintRowState() {
 }
 
 // One delegated handler, attached once: it survives every re-render.
+function notificationCards(items) {
+  return items.map(n=>`<div class="li"><span class="n"><span class="badge">${esc(n.kind)}</span> ${esc(n.body)} ${n.thread_id?`<button data-open="${n.thread_id}">view</button>`:''}</span>${token?`<button data-received="${n.id}">seen</button>`:''}</div>`).join('');
+}
 $('#threads').onclick = async (e) => {
+  const received=e.target.closest('[data-received]');
+  if(received) {await api(`/api/projects/${S.project}/receive`,{ids:[Number(received.dataset.received)]});await loadProjects();return;}
+  const open=e.target.closest('[data-open]'); if(open) {e.preventDefault();await openThread(Number(open.dataset.open));return;}
+  const skill=e.target.closest('[data-skill]');
+  if(skill) { const data=await api(`/api/projects/${S.project}/skills/${encodeURIComponent(skill.dataset.skill)}`);
+    $('#thread').innerHTML=`<div class="side"><h2>${esc(data.name)} · v${data.version}</h2><pre style="white-space:pre-wrap">${esc(data.body)}</pre>${data.thread_id?`<button id="skillHistory">History and feedback</button>`:''}</div>`;
+    if(data.thread_id) $('#skillHistory').onclick=()=>openThread(data.thread_id);return;
+  }
+
   const dec = e.target.closest('[data-d]');
   if (dec) {
     const d = dec.closest('.decide'), v = dec.dataset.d;
@@ -342,7 +355,9 @@ async function renderTeam() {
       <div class="li" style="color:var(--muted)">by ${esc(d.context.author)} · ${fmt(d.context.created_at)} · <a href="#" data-open="${d.context_thread_id}" title="Open the thread with every past version of this brief">history</a></div>` : '<div class="li" style="color:var(--muted)">No project context written yet.</div>'}
     <h3>Members</h3>${d.members.map(a => `<div class="li"><span class="n">${a.live ? '<span class="dot live" title="this agent is connected right now"></span> ' : ''}${esc(a.name)} <small style="color:var(--muted)">${esc(a.provider || '')}${a.paused_reason ? ' · PAUSED: ' + esc(a.paused_reason) : ''}</small></span><span>${acts(a)}</span></div>`).join('') || '<div class="li">-</div>'}
     <h3>Active claims</h3>${d.claims.map(c => `<div class="li"><span class="n"><code>${esc(c.path)}</code> by ${esc(c.agent)}${c.note ? ' · ' + esc(c.note) : ''}</span></div>`).join('') || '<div class="li">none</div>'}
-    <h3>Tasks</h3>${d.tasks.map(t => `<div class="li"><span class="n"><span class="badge">${t.status}</span> ${esc(t.title)}${t.owner ? ' · ' + esc(t.owner) : ''}</span></div>`).join('') || '<div class="li">none</div>'}
+    <h3>Notifications</h3>${notificationCards(d.notifications)}
+    <h3>Skills</h3>${d.skills.map(s=>`<div class="li"><span class="n"><button data-skill="${esc(s.name)}">${esc(s.name)} · v${s.version}</button><br>${esc(s.description)}</span></div>`).join('')}
+    <h3>Tasks</h3>${d.tasks.map(t => `<div class="li"><span class="n"><span class="badge">${esc(t.state || t.status)}</span> ${esc(t.title)}${t.owner ? ' · ' + esc(t.owner) : ''}${t.overdue?' · overdue':''}${t.depends_on?.length?' · depends on '+t.depends_on.join(', '):''}${t.thread_id?` <button data-open="${t.thread_id}">details</button>`:''}${t.result?`<br>${esc(t.result)}`:''}</span></div>`).join('') || '<div class="li">none</div>'}
   </div>`;
   $('#threads').querySelectorAll('[data-pause-agent]').forEach(b => b.onclick = async () => {
     const paused = b.dataset.paused === '1';

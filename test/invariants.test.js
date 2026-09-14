@@ -61,7 +61,7 @@ test('claims detect overlapping paths', () => {
   s.join(a, p); s.join(b, p);
   s.claim(a, p.id, ['src/api/'], { note: 'auth' });
   assert.throws(() => s.claim(b, p.id, ['src/api/users.js']), /already claimed/);
-  const forced = s.claim(b, p.id, ['src/api/users.js'], { force: true });
+  const forced = s.claim(b, p.id, ['src/api/users.js'], { force: true, note: 'Coordinated exception' });
   assert.equal(forced.conflicts.length, 1);
   s.release(a, p.id);
   assert.equal(s.activeClaims(p.id).filter(c => c.agent === 'a').length, 0);

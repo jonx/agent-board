@@ -2,6 +2,7 @@
 // so the human-in-the-loop rules that need to know *who* acts are enforced here.
 // Rules that don't need the actor live as triggers in db.js.
 
+import { collaborationMethods } from './collaboration.js';
 import { EventEmitter } from 'node:events';
 import { createHash } from 'node:crypto';
 import { THREAD_KINDS, THREAD_STATUSES, TASK_STATUSES, VERDICTS, SYSTEM_AGENT, ACK_STATES } from './db.js';
@@ -74,20 +75,21 @@ export class Store {
     if (from.provider === 'system' || into.provider === 'system') throw new BoardError('forbidden', 'the board account cannot be merged');
     if (from.id === into.id) throw new BoardError('bad_input', 'an agent cannot be merged into itself');
     if (this.canonical(into).id === from.id) throw new BoardError('bad_input', 'that would make a loop');
-    this.db.exec('BEGIN');
+    this.db.exec('SAVEPOINT store_write');
     try {
       // Live state follows the identity.
       for (const m of this.db.prepare(`SELECT * FROM memberships WHERE agent_id = ?`).all(from.id)) {
         const t = this.db.prepare(`SELECT * FROM memberships WHERE agent_id = ? AND project_id = ?`).get(into.id, m.project_id);
-        if (t) this.db.prepare(`UPDATE memberships SET last_read_message_id = max(last_read_message_id, ?) WHERE agent_id = ? AND project_id = ?`).run(m.last_read_message_id, into.id, m.project_id);
+        if (t) { /* Per-thread and exact receipts are merged below. */ }
         else this.db.prepare(`INSERT INTO memberships (agent_id, project_id, last_read_message_id, joined_at, last_seen_at) VALUES (?,?,?,?,?)`).run(into.id, m.project_id, m.last_read_message_id, m.joined_at, m.last_seen_at);
       }
+      this.mergeCollaboration(from.id, into.id);
       this.db.prepare(`DELETE FROM memberships WHERE agent_id = ?`).run(from.id);
       this.db.prepare(`UPDATE claims SET agent_id = ? WHERE agent_id = ? AND released_at IS NULL`).run(into.id, from.id);
       this.db.prepare(`UPDATE tasks SET owner_id = ? WHERE owner_id = ?`).run(into.id, from.id);
       this.db.prepare(`UPDATE agents SET merged_into = ?, retired = 1 WHERE id = ?`).run(into.id, from.id);
-      this.db.exec('COMMIT');
-    } catch (e) { this.db.exec('ROLLBACK'); throw e; }
+      this.db.exec('RELEASE store_write');
+    } catch (e) { this.db.exec('ROLLBACK TO store_write'); this.db.exec('RELEASE store_write'); throw e; }
     this.event('agent.merged', { agentId: from.id, data: { by: actor.name, from: from.name, into: into.name } });
     this.emit('agents', {});
     return { from: from.name, into: into.name };
@@ -167,6 +169,7 @@ export class Store {
     const last = this.db.prepare(`SELECT COALESCE(max(id),0) AS id FROM messages WHERE project_id = ?`).get(project.id).id;
     this.db.prepare(`INSERT INTO memberships (agent_id, project_id, last_read_message_id, joined_at, last_seen_at) VALUES (?,?,?,?,?)`)
       .run(agent.id, project.id, last, now(), now());
+    this.markRead(agent,project.id,last);
     this.event('agent.joined', { agentId: agent.id, projectId: project.id, data: { agent: agent.name } });
     return this.db.prepare(`SELECT * FROM memberships WHERE agent_id = ? AND project_id = ?`).get(agent.id, project.id);
   }
@@ -251,7 +254,7 @@ export class Store {
       WHERE m.project_id = ? AND m.id > ? ORDER BY m.id LIMIT ?`).all(projectId, sinceId, limit);
   }
 
-  createThread(actor, { projectId, kind, title, body, ref = null, needsHuman = false, mentions = [] }) {
+  createThread(actor, { projectId, kind, title, body, ref = null, needsHuman = false, mentions = [], notify = true }) {
     if (!THREAD_KINDS.includes(kind)) throw new BoardError('bad_kind', `kind must be one of ${THREAD_KINDS.join(', ')}`);
     if (!title?.trim()) throw new BoardError('bad_input', 'title is required');
     this.assertCanAct(actor, projectId);
@@ -260,13 +263,13 @@ export class Store {
     const status = needsHuman ? 'awaiting_human' : 'open';
     const t = now();
     const tx = this.db.prepare(`INSERT INTO threads (project_id, kind, title, ref, created_by, needs_human, status, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?)`);
-    this.db.exec('BEGIN');
+    this.db.exec('SAVEPOINT store_write');
     let threadId;
     try {
       threadId = Number(tx.run(projectId, kind, title.trim(), ref, actor.id, needsHuman ? 1 : 0, status, t, t).lastInsertRowid);
-      if (body?.trim()) this.insertMessage({ threadId, projectId, author: actor, body, mentions });
-      this.db.exec('COMMIT');
-    } catch (e) { this.db.exec('ROLLBACK'); throw e; }
+      if (body?.trim()) this.insertMessage({ threadId, projectId, author: actor, body, mentions, notify });
+      this.db.exec('RELEASE store_write');
+    } catch (e) { this.db.exec('ROLLBACK TO store_write'); this.db.exec('RELEASE store_write'); throw e; }
     this.event('thread.created', { agentId: actor.id, projectId, threadId, data: { kind, title, needs_human: needsHuman } });
     this.emit('thread', { projectId, threadId });
     return this.getThread(threadId);
@@ -293,7 +296,7 @@ export class Store {
     if (p.archived) throw new BoardError('archived', 'project is archived');
   }
 
-  insertMessage({ threadId, projectId, author, body, verdict = null, mentions = [], kind = 'message' }) {
+  insertMessage({ threadId, projectId, author, body, verdict = null, mentions = [], kind = 'message', notify = true }) {
     const all = new Set(mentions.map(s => String(s).replace(/^@/, '').toLowerCase()));
     for (const m of body.matchAll(/(^|[\s(])@([a-z0-9][a-z0-9._-]*)/gi)) all.add(m[2].toLowerCase());
     const prev = this.db.prepare(`SELECT id, hash FROM messages ORDER BY id DESC LIMIT 1`).get();
@@ -305,10 +308,11 @@ export class Store {
     this.db.prepare(`INSERT INTO messages (id, thread_id, project_id, author_id, body, verdict, mentions, kind, prev_hash, hash, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`)
       .run(id, threadId, projectId, author.id, body, verdict, mentionsJson, kind, prevHash, hash, createdAt);
     this.db.prepare(`UPDATE threads SET updated_at = ? WHERE id = ?`).run(createdAt, threadId);
+    if (notify) this.notifyMessage({ id, projectId, threadId, author, body, mentions: [...all] });
     return id;
   }
 
-  post(actor, { threadId, body, verdict = null, mentions = [] }) {
+  post(actor, { threadId, body, verdict = null, mentions = [], notify = true }) {
     const thread = this.getThread(threadId);
     if (!thread) throw new BoardError('not_found', `thread ${threadId} not found`);
     if (!body?.trim()) throw new BoardError('bad_input', 'body is required');
@@ -325,15 +329,14 @@ export class Store {
       if (thread.needs_human && actor.role !== 'human') advisory = true; // recorded as an opinion, does not decide
       else newStatus = target;
     }
-    this.db.exec('BEGIN');
+    this.db.exec('SAVEPOINT store_write');
     let id;
     try {
-      id = this.insertMessage({ threadId, projectId: thread.project_id, author: actor, body, verdict, mentions });
+      id = this.insertMessage({ threadId, projectId: thread.project_id, author: actor, body, verdict, mentions, notify });
       if (newStatus) this.db.prepare(`UPDATE threads SET status = ?, updated_at = ? WHERE id = ?`).run(newStatus, now(), threadId);
-      this.db.exec('COMMIT');
-    } catch (e) { this.db.exec('ROLLBACK'); throw e; }
-    if (actor.role !== 'human') this.markRead(actor, thread.project_id, id); // your own post is read
-    else this.markHumanRead(threadId, id);
+      this.db.exec('RELEASE store_write');
+    } catch (e) { this.db.exec('ROLLBACK TO store_write'); this.db.exec('RELEASE store_write'); throw e; }
+    if (actor.role === 'human') this.markHumanRead(threadId, id); // posting does not imply reading earlier messages
     if (newStatus) this.event('thread.status', { agentId: actor.id, projectId: thread.project_id, threadId, data: { status: newStatus, via: implied ? 'one-word reply' : 'verdict' } });
     this.emit('message', { projectId: thread.project_id, threadId, messageId: id, authorId: actor.id, authorRole: actor.role });
     return { id, status: newStatus ?? thread.status, advisory, ...(implied ? { implied_verdict: implied } : {}) };
@@ -348,12 +351,12 @@ export class Store {
       if (thread.needs_human) throw new BoardError('human_only', 'this thread requires a human decision; agents may only comment (optionally with an advisory verdict)');
       if (!['open', 'resolved'].includes(status)) throw new BoardError('human_only', 'agents can only resolve or reopen threads; use a verdict on a review to approve/request changes');
     }
-    this.db.exec('BEGIN');
+    this.db.exec('SAVEPOINT store_write');
     try {
       if (note?.trim()) this.insertMessage({ threadId, projectId: thread.project_id, author: actor, body: note });
       this.db.prepare(`UPDATE threads SET status = ?, updated_at = ? WHERE id = ?`).run(status, now(), threadId);
-      this.db.exec('COMMIT');
-    } catch (e) { this.db.exec('ROLLBACK'); throw e; }
+      this.db.exec('RELEASE store_write');
+    } catch (e) { this.db.exec('ROLLBACK TO store_write'); this.db.exec('RELEASE store_write'); throw e; }
     this.event('thread.status', { agentId: actor.id, projectId: thread.project_id, threadId, data: { status, by: actor.name } });
     this.emit('thread', { projectId: thread.project_id, threadId });
     return this.getThread(threadId);
@@ -366,6 +369,7 @@ export class Store {
     if (!thread) throw new BoardError('not_found', 'thread not found');
     this.assertCanAct(actor, thread.project_id, thread);
     if (archived) {
+      if(this.db.prepare("SELECT 1 FROM tasks t JOIN task_details d ON d.task_id=t.id WHERE t.thread_id=? AND d.state NOT IN ('done','failed','declined','cancelled')").get(threadId)) throw new BoardError('conflict','finish or cancel the delegated task before archiving');
       if (!summary || summary.trim().length < 20) {
         throw new BoardError('bad_input', 'archiving requires a short account of what was actually done and how you checked it (at least 20 characters). If the work is not finished, do not archive.');
       }
@@ -375,13 +379,13 @@ export class Store {
       }
     }
     const t = now();
-    this.db.exec('BEGIN');
+    this.db.exec('SAVEPOINT store_write');
     try {
       if (summary?.trim()) this.insertMessage({ threadId, projectId: thread.project_id, author: actor, body: summary.trim() });
       this.db.prepare(`UPDATE threads SET archived_at = ?, archived_by = ?, status = CASE WHEN ? AND status IN ('open','changes_requested') THEN 'resolved' ELSE status END, updated_at = ? WHERE id = ?`)
         .run(archived ? t : null, archived ? actor.id : null, archived ? 1 : 0, t, threadId);
-      this.db.exec('COMMIT');
-    } catch (e) { this.db.exec('ROLLBACK'); throw e; }
+      this.db.exec('RELEASE store_write');
+    } catch (e) { this.db.exec('ROLLBACK TO store_write'); this.db.exec('RELEASE store_write'); throw e; }
     this.event(archived ? 'thread.archived' : 'thread.unarchived', { agentId: actor.id, projectId: thread.project_id, threadId, data: { by: actor.name } });
     this.emit('thread', { projectId: thread.project_id, threadId });
     return this.getThread(threadId);
@@ -420,12 +424,13 @@ export class Store {
     this.assertCanAct(actor, thread.project_id, thread);
     if (note && note.length > 200) note = note.slice(0, 200);
     if (actor.role === 'human') this.markHumanRead(threadId);
-    this.db.prepare(`INSERT INTO reactions (thread_id, project_id, agent_id, state, note, created_at) VALUES (?,?,?,?,?,?)`)
-      .run(threadId, thread.project_id, actor.id, state, note, now());
+    const lastMessage=this.db.prepare('SELECT max(id) AS id FROM messages WHERE thread_id=?').get(threadId).id;
+    this.db.prepare(`INSERT INTO reactions (thread_id, project_id, agent_id, state, note, created_at, message_id) VALUES (?,?,?,?,?,?,?)`)
+      .run(threadId, thread.project_id, actor.id, state, note, now(),lastMessage);
     // Acknowledging a thread means you have seen what is in it.
     if (actor.role !== 'human') {
       const last = this.db.prepare(`SELECT max(id) AS id FROM messages WHERE thread_id = ?`).get(threadId).id;
-      if (last) this.markRead(actor, thread.project_id, last);
+      if (last) this.markThreadRead(actor, threadId, last);
     }
     this.emit('ack', { projectId: thread.project_id, threadId, agentId: actor.id, state });
     return { thread_id: threadId, state, note, acks: this.threadAcks(threadId) };
@@ -434,7 +439,7 @@ export class Store {
   /** Current acknowledgement of each agent on a thread (latest row per agent). */
   threadAcks(threadId) {
     return this.db.prepare(`
-      SELECT r.state, r.note, r.created_at, a.name AS agent, a.role AS agent_role FROM reactions r JOIN agents a ON a.id = r.agent_id
+      SELECT r.state, r.note, r.created_at, r.message_id, a.name AS agent, a.role AS agent_role FROM reactions r JOIN agents a ON a.id = r.agent_id
       WHERE r.thread_id = ?1 AND r.id IN (SELECT max(id) FROM reactions WHERE thread_id = ?1 GROUP BY agent_id)
       ORDER BY r.created_at`).all(threadId);
   }
@@ -446,74 +451,87 @@ export class Store {
 
   /** Which agents have already read up to a given message (their inbox cursor passed it). */
   readReceipts(projectId, messageId, exceptAgentId = null) {
-    return this.db.prepare(`
-      SELECT a.name, m.last_read_message_id FROM memberships m JOIN agents a ON a.id = m.agent_id
-      WHERE m.project_id = ? AND m.last_read_message_id >= ? AND a.id <> COALESCE(?, -1) AND a.provider IS NOT 'system'
-      ORDER BY a.name`).all(projectId, messageId, exceptAgentId).map(r => r.name);
+    return this.db.prepare(`SELECT a.name FROM agent_reads r JOIN agents a ON a.id=r.agent_id
+      JOIN messages msg ON msg.thread_id=r.thread_id
+      WHERE msg.id=? AND msg.project_id=? AND (r.last_read_message_id>=msg.id OR EXISTS(SELECT 1 FROM message_reads x WHERE x.agent_id=r.agent_id AND x.message_id=msg.id))
+        AND a.id<>COALESCE(?,-1) AND a.provider IS NOT 'system' ORDER BY a.name`)
+      .all(messageId, projectId, exceptAgentId).map(r => r.name);
   }
 
-  // ---------- inbox ----------
+  markThreadRead(agent, threadId, upToId) {
+    this.db.prepare(`INSERT INTO agent_reads(agent_id,thread_id,last_read_message_id) VALUES (?,?,?)
+      ON CONFLICT(agent_id,thread_id) DO UPDATE SET last_read_message_id=max(last_read_message_id,excluded.last_read_message_id)`)
+      .run(agent.id, threadId, upToId);
+  }
+
+  // Compatibility for callers consuming a complete chronological project prefix only.
   markRead(agent, projectId, upToId) {
-    this.db.prepare(`UPDATE memberships SET last_read_message_id = max(last_read_message_id, ?), last_seen_at = ? WHERE agent_id = ? AND project_id = ?`)
-      .run(upToId, now(), agent.id, projectId);
+    for (const t of this.db.prepare('SELECT id FROM threads WHERE project_id=?').all(projectId)) this.markThreadRead(agent,t.id,upToId);
   }
 
-  /** Unread messages for an agent in a project, grouped by thread. Agents see *everything* posted in their project. */
   inbox(agent, projectId, { peek = false, limit = 100 } = {}) {
-    const m = this.db.prepare(`SELECT last_read_message_id FROM memberships WHERE agent_id = ? AND project_id = ?`).get(agent.id, projectId);
-    const since = m?.last_read_message_id ?? 0;
+    limit = Math.max(1, Math.min(200, Number(limit) || 100));
     const rows = this.db.prepare(`
-      SELECT m.id, m.thread_id, m.body, m.verdict, m.mentions, m.created_at, a.name AS author, a.role AS author_role,
-             t.title, t.kind, t.status, t.needs_human
-      FROM messages m JOIN agents a ON a.id = m.author_id JOIN threads t ON t.id = m.thread_id
-      WHERE m.project_id = ? AND m.id > ? AND m.author_id <> ? ORDER BY m.id LIMIT ?`).all(projectId, since, agent.id, limit + 1);
-    const truncated = rows.length > limit;
-    if (truncated) rows.pop();
-    const threads = new Map();
-    for (const r of rows) {
-      const mentions = JSON.parse(r.mentions);
-      const mentioned = mentions.includes(agent.name) || mentions.includes('all') || mentions.includes('everyone');
-      if (!threads.has(r.thread_id)) threads.set(r.thread_id, { thread_id: r.thread_id, title: r.title, kind: r.kind, status: r.status, mentions_you: false, from_human: false, messages: [] });
-      const t = threads.get(r.thread_id);
-      t.mentions_you ||= mentioned; t.from_human ||= r.author_role === 'human';
-      t.messages.push({ id: r.id, author: r.author, author_role: r.author_role, body: r.body, verdict: r.verdict, mentioned, created_at: r.created_at });
+      SELECT m.*, a.name AS author, a.role AS author_role,t.title,t.kind AS thread_kind,t.status,
+        CASE WHEN a.role='human' THEN 2 WHEN EXISTS(SELECT 1 FROM json_each(m.mentions) WHERE value IN (?, 'all','everyone')) THEN 1 ELSE 0 END AS priority
+      FROM messages m JOIN agents a ON a.id=m.author_id JOIN threads t ON t.id=m.thread_id
+      LEFT JOIN agent_reads r ON r.thread_id=m.thread_id AND r.agent_id=?
+      WHERE m.project_id=? AND m.author_id<>? AND m.id>COALESCE(r.last_read_message_id,0)
+      AND NOT EXISTS(SELECT 1 FROM message_reads x WHERE x.agent_id=? AND x.message_id=m.id)
+      ORDER BY priority DESC,m.id LIMIT ?`).all(agent.name,agent.id,projectId,agent.id,agent.id,limit+1);
+    const truncated=rows.length>limit; if(truncated) rows.pop();
+    const threads=new Map();
+    for(const r of rows) {
+      const mentioned=JSON.parse(r.mentions).some(n=>[agent.name,'all','everyone'].includes(n));
+      if(!threads.has(r.thread_id)) threads.set(r.thread_id,{thread_id:r.thread_id,title:r.title,kind:r.thread_kind,status:r.status,mentions_you:false,from_human:false,messages:[]});
+      const t=threads.get(r.thread_id); t.mentions_you ||= mentioned; t.from_human ||= r.author_role==='human';
+      t.messages.push({id:r.id,author:r.author,author_role:r.author_role,body:r.body,verdict:r.verdict,mentioned,created_at:r.created_at});
     }
-    const maxId = rows.length ? rows[rows.length - 1].id : since;
-    if (!peek && rows.length) this.markRead(agent, projectId, maxId);
-    const list = [...threads.values()].sort((a, b) => (b.from_human - a.from_human) || (b.mentions_you - a.mentions_you));
-    return { unread: rows.length, truncated, threads: list };
+    // Priority pagination can skip older messages in the same thread: record exact delivery,
+    // advancing a thread cursor only through messages already returned or authored by self.
+    if(!peek) for(const r of rows) { this.markThreadRead(agent,r.thread_id,0); this.db.prepare('INSERT OR IGNORE INTO message_reads(agent_id,message_id) VALUES (?,?)').run(agent.id,r.id); }
+    return {unread:rows.length,truncated,threads:[...threads.values()]};
   }
 
   unreadCount(agent, projectId) {
-    const m = this.db.prepare(`SELECT last_read_message_id FROM memberships WHERE agent_id = ? AND project_id = ?`).get(agent.id, projectId);
-    return this.db.prepare(`SELECT count(*) AS n FROM messages WHERE project_id = ? AND id > ? AND author_id <> ?`).get(projectId, m?.last_read_message_id ?? 0, agent.id).n;
+    return this.db.prepare(`SELECT count(*) AS n FROM messages m LEFT JOIN agent_reads r ON r.thread_id=m.thread_id AND r.agent_id=?
+      WHERE m.project_id=? AND m.author_id<>? AND m.id>COALESCE(r.last_read_message_id,0)
+      AND NOT EXISTS(SELECT 1 FROM message_reads x WHERE x.agent_id=? AND x.message_id=m.id)`)
+      .get(agent.id,projectId,agent.id,agent.id).n;
   }
 
   /** Threads where someone is expecting something from this agent and it has not answered
    *  since. Replaces "wait for an answer": a returning agent gets a to-do list, not a block. */
   waitingOnAgent(agent, projectId) {
-    return this.db.prepare(`
-      SELECT t.id, t.kind, t.title, t.status,
-             (SELECT m.body FROM messages m WHERE m.thread_id = t.id ORDER BY m.id DESC LIMIT 1) AS last_body,
-             (SELECT a.name FROM messages m JOIN agents a ON a.id = m.author_id WHERE m.thread_id = t.id ORDER BY m.id DESC LIMIT 1) AS last_author
-      FROM threads t
-      WHERE t.project_id = ? AND t.status IN ('open','changes_requested') AND t.paused_reason IS NULL AND t.archived_at IS NULL
-        AND EXISTS (SELECT 1 FROM messages m WHERE m.thread_id = t.id AND m.author_id <> ?
-                     AND (m.mentions LIKE '%"' || ?2b || '"%' OR m.mentions LIKE '%"all"%')
-                     AND m.id > COALESCE((SELECT max(m2.id) FROM messages m2 WHERE m2.thread_id = t.id AND m2.author_id = ?), 0))
-      ORDER BY t.updated_at DESC LIMIT 20`.replace('?2b', '?'))
-      .all(projectId, agent.id, agent.name, agent.id)
-      .map(t => ({ ...t, last_body: (t.last_body ?? '').slice(0, 200) }));
+    return this.listThreads(projectId,{status:'active',limit:200}).filter(t=>!t.paused_reason&&!t.archived_at).filter(t=> {
+      const messages=this.threadMessages(t.id);
+      const request=messages.findLast(m=>m.author_id!==agent.id&&m.mentions.some(n=>[agent.name,'all','everyone'].includes(n)));
+      if(!request) return false;
+      const ack=this.threadAcks(t.id).find(a=>a.agent===agent.name);
+      if(ack&&ack.message_id>=request.id) {
+        if(['done','declined'].includes(ack.state)) return false;
+        if(['working','blocked'].includes(ack.state)) return true;
+      }
+      // A review needs an actual verdict; a progress comment is still a commitment.
+      return !messages.some(m=>m.id>request.id&&m.author_id===agent.id&&(t.kind!=='review'||m.verdict));
+    }).slice(0,20).map(t=> {
+      const last=this.threadMessages(t.id).at(-1);
+      return {id:t.id,kind:t.kind,title:t.title,status:t.status,last_body:(last?.body??'').slice(0,200),last_author:last?.author};
+    });
   }
 
-  /** Questions/reviews this agent opened that nobody has answered yet. */
   unansweredAsks(agent, projectId) {
-    return this.db.prepare(`
-      SELECT t.id, t.kind, t.title, t.status, t.created_at FROM threads t
-      WHERE t.project_id = ? AND t.created_by = ? AND t.kind IN ('question','review','decision','board-change')
-        AND t.status IN ('open','awaiting_human') AND t.archived_at IS NULL
-        AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.thread_id = t.id AND m.author_id <> ?)
-      ORDER BY t.created_at LIMIT 20`).all(projectId, agent.id, agent.id);
+    return this.listThreads(projectId,{status:'active',limit:200}).filter(t=>
+      t.created_by===agent.id && !t.archived_at && ['question','review','decision','board-change'].includes(t.kind))
+      .filter(t=> {
+        if(t.needs_human) return t.status==='awaiting_human';
+        const delegated=this.db.prepare('SELECT d.state FROM tasks tk JOIN task_details d ON d.task_id=tk.id WHERE tk.thread_id=?').get(t.id);
+        if(delegated) return !['done','failed','declined','cancelled'].includes(delegated.state);
+        const messages=this.threadMessages(t.id);
+        if(t.kind==='review') return !messages.some(m=>m.author_id!==agent.id&&m.verdict);
+        const working=this.threadAcks(t.id).some(a=>a.agent!==agent.name&&['working','blocked'].includes(a.state));
+        return working || !messages.some(m=>m.author_id!==agent.id);
+      }).slice(0,20).map(t=>({id:t.id,kind:t.kind,title:t.title,status:t.status,created_at:t.created_at}));
   }
 
   // ---------- tasks ----------
@@ -525,8 +543,10 @@ export class Store {
       LEFT JOIN agents o ON o.id = tk.owner_id JOIN agents c ON c.id = tk.created_by
       WHERE ${w} ORDER BY CASE tk.status WHEN 'doing' THEN 0 WHEN 'blocked' THEN 1 WHEN 'todo' THEN 2 ELSE 3 END, tk.updated_at DESC`).all(...args);
   }
-  upsertTask(actor, projectId, { id = null, title, description = null, status = null, owner = null, threadId = null }) {
+  upsertTask(actor,projectId,args) { return this.atomic(()=>this._upsertTask(actor,projectId,args)); }
+  _upsertTask(actor, projectId, { id = null, title, description = null, status = null, owner = null, threadId = null }) {
     this.assertCanAct(actor, projectId);
+    if (threadId) { const thread=this.getThread(threadId); if(!thread||thread.project_id!==projectId) throw new BoardError('bad_input','thread must belong to this project'); this.assertCanAct(actor,projectId,thread); }
     if (status && !TASK_STATUSES.includes(status)) throw new BoardError('bad_input', `status must be one of ${TASK_STATUSES.join(', ')}`);
     let ownerId = null;
     if (owner === 'me') ownerId = actor.id;
@@ -535,6 +555,9 @@ export class Store {
     if (id) {
       const cur = this.db.prepare(`SELECT * FROM tasks WHERE id = ? AND project_id = ?`).get(id, projectId);
       if (!cur) throw new BoardError('not_found', 'task not found');
+      if (this.db.prepare('SELECT 1 FROM task_details WHERE task_id=?').get(id)) throw new BoardError('conflict', 'use board_task_update for delegated tasks');
+      if (cur.owner_id && actor.role !== 'human' && cur.owner_id !== actor.id) throw new BoardError('conflict', 'task already owned; request an explicit transfer');
+      if (ownerId && cur.owner_id && ownerId !== cur.owner_id && actor.role !== 'human') throw new BoardError('conflict', 'use board_task_transfer to hand off ownership');
       this.db.prepare(`UPDATE tasks SET title = COALESCE(?, title), description = COALESCE(?, description), status = COALESCE(?, status), owner_id = COALESCE(?, owner_id), thread_id = COALESCE(?, thread_id), updated_at = ? WHERE id = ?`)
         .run(title ?? null, description, status, ownerId, threadId, t, id);
     } else {
@@ -553,7 +576,19 @@ export class Store {
       SELECT c.*, a.name AS agent FROM claims c JOIN agents a ON a.id = c.agent_id
       WHERE c.project_id = ? AND c.released_at IS NULL AND c.expires_at > ? ORDER BY c.created_at`).all(projectId, now());
   }
-  claim(actor, projectId, paths, { note = null, taskId = null, hours = 4, force = false } = {}) {
+  claim(actor,projectId,paths,args={}) {
+    const alert = conflicts => {
+      for (const c of conflicts ?? []) {
+        const owner = this.getAgent(c.held_by);
+        const body = `${actor.name} ${args.force ? 'overrode' : 'requested'} ${c.path}, overlapping your claim${args.note ? ': '+args.note : ''}`;
+        if (!this.notifications(owner,projectId).some(n=>n.kind==='claim.conflict'&&n.body===body))
+          this.notify(projectId,owner.id,'claim.conflict',body,{priority:2});
+      }
+    };
+    try { const result=this.atomic(()=>this._claim(actor,projectId,paths,args)); alert(result.conflicts); return result; }
+    catch(e) { if(e.code==='conflict') alert(e.extra.conflicts); throw e; }
+  }
+  _claim(actor, projectId, paths, { note = null, taskId = null, hours = 4, force = false } = {}) {
     this.assertCanAct(actor, projectId);
     paths = [...new Set(paths.map(normPath).filter(Boolean))];
     if (!paths.length) throw new BoardError('bad_input', 'at least one path is required');
@@ -562,6 +597,8 @@ export class Store {
       if (c.agent_id === actor.id) continue;
       for (const p of paths) if (overlaps(p, c.path)) conflicts.push({ path: p, held_by: c.agent, their_path: c.path, note: c.note, expires_at: c.expires_at });
     }
+    if (force && !note?.trim()) throw new BoardError('bad_input', 'force requires a reason in note');
+    if (taskId && !this.db.prepare('SELECT 1 FROM tasks WHERE id=? AND project_id=? AND owner_id=?').get(taskId,projectId,actor.id)) throw new BoardError('bad_input','claim task must belong to you in this project');
     if (conflicts.length && !force) {
       throw new BoardError('conflict', 'some paths are already claimed by another agent; coordinate with them on the board first (or pass force=true and say why)', { conflicts });
     }
@@ -596,7 +633,7 @@ export class Store {
     const sys = this.systemAgent();
     let t = this.db.prepare(`SELECT id FROM threads WHERE project_id = ? AND kind = 'status' AND created_by = ? AND title = 'Board updates'`).get(projectId, sys.id);
     const now_ = now();
-    this.db.exec('BEGIN');
+    this.db.exec('SAVEPOINT store_write');
     let id;
     try {
       if (!t) {
@@ -604,8 +641,8 @@ export class Store {
         t = { id: Number(r.lastInsertRowid) };
       }
       id = this.insertMessage({ threadId: t.id, projectId, author: sys, body, kind: 'system' });
-      this.db.exec('COMMIT');
-    } catch (e) { this.db.exec('ROLLBACK'); throw e; }
+      this.db.exec('RELEASE store_write');
+    } catch (e) { this.db.exec('ROLLBACK TO store_write'); this.db.exec('RELEASE store_write'); throw e; }
     this.emit('message', { projectId, threadId: t.id, messageId: id, authorId: sys.id, authorRole: 'agent' });
     return { thread_id: t.id, id };
   }
@@ -689,3 +726,5 @@ export function normPath(p) {
 export function overlaps(a, b) {
   return a === b || a.startsWith(b + '/') || b.startsWith(a + '/') || a === '' || b === '';
 }
+
+Object.assign(Store.prototype, collaborationMethods);
