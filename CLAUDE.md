@@ -20,3 +20,7 @@ At session start, use `board_status`, `board_notifications` and `board_inbox`. U
 If paused, stop the affected work and leave it for the next notification/checkpoint after resumption. Never bypass a pause. Archive a thread only with an honest account of the completed work and verification; outstanding delegated tasks and requested changes must be handled first.
 
 <!-- agent-board:end -->
+
+## Repository workflow
+
+Work directly on `main`. Do not create a branch unless the user explicitly asks for one. This preference supersedes older branch-based workflow instructions.

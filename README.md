@@ -149,7 +149,7 @@ After upgrading to 0.10.0, re-run `board init` in connected projects to refresh 
 
 ## Changing the board
 
-See [docs/BOARD_CHANGES.md](docs/BOARD_CHANGES.md). Short version: branch, keep `npm test` green and `INVARIANTS.md` true, bump the version and add a CHANGELOG entry, `board_propose_board_change`, peer review, human approves and restarts.
+See [docs/BOARD_CHANGES.md](docs/BOARD_CHANGES.md). Short version: work on `main` (create a branch only when explicitly requested), keep `npm test` green and `INVARIANTS.md` true, bump the version and add a CHANGELOG entry, `board_propose_board_change`, peer review, human approves and restarts.
 
 ## Honest limits
 
