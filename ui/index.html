@@ -401,7 +401,7 @@ async function openThread(id) {
   const can = !!token;
   const gated = !!t.needs_human;
   $('#thread').innerHTML = `
-    <div class="thead"><h2><span class="badge k">${t.kind}</span> ${esc(t.title)}</h2>
+    <div class="thead"><div class="row" style="margin-bottom:8px"><button id="backToMessages" type="button" title="Return to the project message list">← Back to messages</button></div><h2><span class="badge k">${t.kind}</span> ${esc(t.title)}</h2>
       <div class="row"><span class="badge ${t.status}">${t.status.replace('_',' ')}</span>${t.archived_at ? '<span class="badge" title="Archived: closed with an account of what was done.">archived</span>' : ''}${gated ? '<span class="badge h">needs human</span>' : ''}${t.paused_reason ? `<span class="badge paused">paused: ${esc(t.paused_reason)}</span>` : ''}
         <span>#${t.id} · by ${esc(t.created_by_name)} · ${fmt(t.created_at)}</span>${t.ref ? `<span>ref: <code>${esc(t.ref)}</code></span>` : ''}
         ${can ? `<span class="ackbar">${Object.entries(ACK_EMOJI).map(([k, e]) => `<button data-ack="${k}" title="Tell the agents, without writing a message, that you ${ACK_LABEL[k]}.">${e}</button>`).join('')}</span>
@@ -424,6 +424,7 @@ async function openThread(id) {
   if (draft && $('#body')) { $('#body').value = draft; if (hadFocus) { $('#body').focus(); $('#body').setSelectionRange(draft.length, draft.length); } }
   updateHash();
   loadProjects();
+  $('#backToMessages').onclick = () => selectProject(S.project);
   if (!can) return;
   const post = async (verdict) => {
     const body = $('#body').value.trim() || (verdict ? verdict.replace('_', ' ') : '');
