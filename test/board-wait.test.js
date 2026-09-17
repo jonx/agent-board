@@ -3,7 +3,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtempSync, rmSync, readFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -24,11 +24,14 @@ async function agent(project, name) {
   await call('board_join', { name });
   return { call };
 }
+const running = new Set();
+test.after(() => { for (const c of running) { try { c.kill('SIGKILL'); } catch {} } });
 const waiter = (project, name) => {
   const child = spawn(process.execPath, [join(ROOT, 'configs', 'claude-code', 'board-wait.js'), project, name],
     { env: { ...process.env, BOARD_URL: base, BOARD_WAIT_INTERVAL_MS: '1000' } });
-  let out = ''; child.stdout.on('data', c => out += c);
-  const exited = new Promise(r => child.on('close', code => r(code)));
+  running.add(child);
+  let out = ''; child.stdout.on('data', c => out += c); child.stderr.on('data', c => out += c);
+  const exited = new Promise(r => child.on('close', code => { running.delete(child); r(code); }));
   return { child, exited, out: () => out };
 };
 
@@ -38,19 +41,60 @@ test('waiter blocks, wakes on a mention, and leaves the notification unacknowled
   const thread = await a.call('board_journal', { body: 'first entry' });
   await a.call('board_post', { thread_id: thread.thread_id ?? thread.id, body: '@claude-b already queued before the waiter starts' });
 
+  // Anything already unread ends the wait at once: the output of a background
+  // task reaches the session only when it ends, so blocking on it would hide it.
+  const first = waiter('demo', 'claude-b');
+  assert.equal(await Promise.race([first.exited, delay(8000).then(() => 'timeout')]), 0);
+  assert.match(first.out(), /1 unread for claude-b/);
+  assert.match(first.out(), /already queued/);
+  assert.match(first.out(), /board_receive/, 'it says how not to be woken by the same thing again');
+
+  await b.call('board_receive', { ids: (await b.call('board_notifications')).notifications.map(n => n.id) });
   const w = waiter('demo', 'claude-b');
   const early = await Promise.race([w.exited, delay(2500).then(() => 'blocked')]);
-  assert.equal(early, 'blocked', 'what was queued before the start must not end the wait');
+  assert.equal(early, 'blocked', 'with nothing unread it waits');
 
   await a.call('board_post', { thread_id: thread.thread_id ?? thread.id, body: '@claude-b wake up please' });
   const code = await Promise.race([w.exited, delay(8000).then(() => 'timeout')]);
-  assert.equal(code, 0);
+  assert.equal(code, 0, w.out());
   assert.match(w.out(), /1 new notification for claude-b/);
   assert.match(w.out(), /wake up please/);
-  assert.doesNotMatch(w.out(), /already queued/);
 
   const pending = await b.call('board_notifications');
-  assert.equal(pending.notifications.filter(n => n.received_at === null).length, 2, 'the waiter only reads');
+  assert.equal(pending.notifications.filter(n => n.received_at === null).length, 1, 'the waiter only reads; the wake it delivered is still unacknowledged');
+});
+
+test('waiter publishes a liveness file while it runs and removes it when it ends', async () => {
+  const a = await agent('demo', 'claude-live-a');
+  await agent('demo', 'claude-live-b');
+  const file = join(tmpdir(), 'agent-board-waiters', 'demo.claude-live-b');
+  const w = waiter('demo', 'claude-live-b');
+  for (let i = 0; i < 40 && !existsSync(file); i++) await delay(100);
+  assert.ok(existsSync(file), 'a running waiter is visible to the hook');
+  const asked = await a.call('board_ask', { title: 'liveness', body: 'a thread to wake into', to: ['claude-live-b'] });
+  await a.call('board_post', { thread_id: asked.id, body: '@claude-live-b wake' });
+  assert.equal(await Promise.race([w.exited, delay(8000).then(() => 'timeout')]), 0, w.out());
+  for (let i = 0; i < 40 && existsSync(file); i++) await delay(100);
+  assert.ok(!existsSync(file), 'a waiter that ended leaves no claim to be reachable');
+});
+
+test('the inbox hook says so when nothing is listening', async () => {
+  const run = (env) => new Promise(resolve => {
+    const c = spawn(process.execPath, [join(ROOT, 'configs', 'claude-code', 'board-inbox.js'), 'demo'],
+      { env: { ...process.env, BOARD_URL: base, ...env } });
+    let out = ''; c.stdout.on('data', d => out += d);
+    c.stdin.end(JSON.stringify({ hook_event_name: 'UserPromptSubmit', session_id: 'hook-' + Math.random() }));
+    c.on('close', () => resolve(out));
+  });
+  rmSync(join(tmpdir(), 'agent-board-waiters'), { recursive: true, force: true });
+  assert.match(await run({}), /NOT reachable while idle/);
+  const dir = join(tmpdir(), 'agent-board-waiters');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'demo.claude-hooked'), String(process.pid));
+  assert.doesNotMatch(await run({}), /NOT reachable/, 'a live waiter silences the warning');
+  writeFileSync(join(dir, 'demo.claude-dead'), '999999');
+  rmSync(join(dir, 'demo.claude-hooked'), { force: true });
+  assert.match(await run({}), /NOT reachable/, 'a stale file from a dead waiter does not count');
 });
 
 test('waiter refuses an unknown project at once and survives an unreachable board otherwise', async () => {

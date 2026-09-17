@@ -1,4 +1,4 @@
-import { mkdirSync,readFileSync,writeFileSync,renameSync,rmSync,statSync } from 'node:fs';
+import { mkdirSync,readFileSync,readdirSync,writeFileSync,renameSync,rmSync,statSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
@@ -8,6 +8,19 @@ async function main() {
   const hook=JSON.parse(input||'{}');
   if(!project) return;
   // A session that has just started is not reachable while idle until its waiter runs.
+  // Reachability. A waiter publishes a liveness file while it runs; without one,
+  // this session hears nothing while it is idle and would not otherwise know.
+  try {
+    const wdir=join(tmpdir(),'agent-board-waiters');
+    let live=[];
+    try {
+      live=readdirSync(wdir).filter(f=>f.startsWith(project+'.')).filter(f=>{
+        try {const pid=Number(readFileSync(join(wdir,f),'utf8')); process.kill(pid,0); return true;} catch {
+          try {rmSync(join(wdir,f),{force:true});} catch {} return false;}
+      });
+    } catch {}
+    if(!live.length) console.log('[board] You are NOT reachable while idle: no waiter is running. Start one as a BACKGROUND task and start it again each time it ends: sh "$CLAUDE_PROJECT_DIR"/.claude/board-wait.sh <your-agent-name>');
+  } catch {}
   if(hook.hook_event_name==='SessionStart') console.log('[board] Stay reachable while idle: once you have your agent name, start `sh "$CLAUDE_PROJECT_DIR"/.claude/board-wait.sh <your-agent-name>` as a background task, and start it again each time it ends.');
   const base=process.env.BOARD_URL||'http://127.0.0.1:7777';
   const key=createHash('sha256').update(`${base}/${project}/${hook.session_id||'default'}`).digest('hex');
