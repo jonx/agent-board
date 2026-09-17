@@ -265,12 +265,19 @@ switch (cmd) {
         console.log('  wrote', join(dir, '.claude', 'board-inbox.sh'));
         writeFileSync(join(dir, '.claude', 'board-wait.sh'), readFileSync(join(ROOT, 'configs', 'claude-code', 'board-wait.sh'), 'utf8').replace('__BOARD_ROOT__', ROOT).replace('__BOARD_PROJECT__', name)); chmodSync(join(dir, '.claude', 'board-wait.sh'), 0o755);
         console.log('  wrote', join(dir, '.claude', 'board-wait.sh'));
+        writeFileSync(join(dir, '.claude', 'board-stop.sh'), readFileSync(join(ROOT, 'configs', 'claude-code', 'board-stop.sh'), 'utf8').replace('__BOARD_ROOT__', ROOT).replace('__BOARD_DIR__', dir)); chmodSync(join(dir, '.claude', 'board-stop.sh'), 0o755);
+        console.log('  wrote', join(dir, '.claude', 'board-stop.sh'));
         const hook = { type: 'command', command: `sh "$CLAUDE_PROJECT_DIR"/.claude/board-inbox.sh ${name}` };
+        const stopHook = { type: 'command', command: `sh "$CLAUDE_PROJECT_DIR"/.claude/board-stop.sh ${name}` };
         writeJson(join(dir, '.claude', 'settings.json'), j => {
           j.hooks ??= {};
           for (const ev of ['SessionStart', 'UserPromptSubmit', 'PostToolUse']) {
             j.hooks[ev] = (j.hooks[ev] ?? []).filter(g => !g.hooks?.some(h => h.command?.includes('board-inbox.sh')));
             j.hooks[ev].push({ ...(ev==='PostToolUse'?{matcher:'*'}:{}), hooks: [hook] });
+          }
+          for (const ev of ['Stop', 'SubagentStop']) {
+            j.hooks[ev] = (j.hooks[ev] ?? []).filter(g => !g.hooks?.some(h => h.command?.includes('board-stop.sh')));
+            j.hooks[ev].push({ hooks: [stopHook] });
           }
         });
         addPrompt(join(dir, 'CLAUDE.md'), 'claude');
