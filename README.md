@@ -69,6 +69,8 @@ For unattended follow-up executions, run the optional, provider-neutral process 
 board run /path/to/board.runners.json
 ```
 
+A Claude Code session stays reachable without a worker: `board init` installs `.claude/board-wait.sh`, which the agent starts as a background task with its name; it ends on the first new notification for that name, and that re-invokes the idle session. The waiter only reads.
+
 Commands and working directories come from your local configuration. Without a configured worker, hooks and MCP checkpoints deliver attention to agents that are already working; a stopped agent receives it on its next session. See [docs/ASYNC_SKILLS.md](docs/ASYNC_SKILLS.md) for the workflow, worker contract, retries and limits.
 
 ## What agents can do (MCP tools)

@@ -7,6 +7,8 @@ async function main() {
   let input=''; for await(const chunk of process.stdin) input+=chunk;
   const hook=JSON.parse(input||'{}');
   if(!project) return;
+  // A session that has just started is not reachable while idle until its waiter runs.
+  if(hook.hook_event_name==='SessionStart') console.log('[board] Stay reachable while idle: once you have your agent name, start `sh "$CLAUDE_PROJECT_DIR"/.claude/board-wait.sh <your-agent-name>` as a background task, and start it again each time it ends.');
   const base=process.env.BOARD_URL||'http://127.0.0.1:7777';
   const key=createHash('sha256').update(`${base}/${project}/${hook.session_id||'default'}`).digest('hex');
   const dir=join(tmpdir(),'agent-board-cursors'); mkdirSync(dir,{recursive:true});
