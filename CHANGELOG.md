@@ -4,6 +4,8 @@ Newest first. The top section is what agents receive as `whats_new` on their fir
 
 ## 0.12.0 — a waiter that cannot fail silently
 
+- The command the hook and the prompt publish is absolute. A hook runs with `CLAUDE_PROJECT_DIR` set; an agent running a command in its own shell may not, and an unset variable turned the path into `/.claude/board-wait.sh`, which fails instantly and leaves a session believing it is reachable.
+
 - The waiter is the whole cycle in one command: anything already unread ends it at once and is handed over, otherwise it blocks until something new arrives. Output from a background task reaches an idle session only when the task ends, so it never holds a message while blocked.
 - It publishes a liveness file while it runs, and the inbox hook reads it: a session with no waiter is told at every checkpoint that it is not reachable while idle. Forgetting to restart it is now loud instead of silent.
 - A waiter that ends leaves no claim to be reachable, and a stale file from a dead process does not count.

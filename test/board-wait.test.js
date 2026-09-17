@@ -114,7 +114,20 @@ test('board init installs the waiter next to the inbox hook and tells Claude to 
     const script = readFileSync(join(target, '.claude', 'board-wait.sh'), 'utf8');
     assert.match(script, /board-wait\.js" "demo" "\$1"/);
     assert.doesNotMatch(script, /__BOARD_/);
-    assert.match(readFileSync(join(target, 'CLAUDE.md'), 'utf8'), /board-wait\.sh <your-agent-name>/);
+    const prompt = readFileSync(join(target, 'CLAUDE.md'), 'utf8');
+    // A hook has CLAUDE_PROJECT_DIR; an agent running a command in a shell may
+    // not, and an unset variable turns the path into /.claude/board-wait.sh.
+    assert.match(prompt, new RegExp(`sh ${target}/\\.claude/board-wait\\.sh <your-agent-name>`));
+    assert.doesNotMatch(prompt, /CLAUDE_PROJECT_DIR"?\/\.claude\/board-wait/);
+    const hookScript = readFileSync(join(target, '.claude', 'board-inbox.sh'), 'utf8');
+    assert.match(hookScript, new RegExp(`"${target}"`), 'the hook carries the directory so its warning can name the command');
+    const warn = await new Promise(resolve => {
+      const c = spawn(process.execPath, [join(ROOT, 'configs', 'claude-code', 'board-inbox.js'), 'demo', target], { env: { ...process.env, BOARD_URL: base } });
+      let out = ''; c.stdout.on('data', d => out += d);
+      c.stdin.end(JSON.stringify({ hook_event_name: 'UserPromptSubmit', session_id: 'abs-' + Math.random() }));
+      c.on('close', () => resolve(out));
+    });
+    assert.match(warn, new RegExp(`sh ${target}/\\.claude/board-wait\\.sh`), 'the warning names a command that runs anywhere');
     assert.doesNotMatch(readFileSync(join(target, 'AGENTS.md'), 'utf8'), /board-wait\.sh/, 'only Claude Code is re-invoked by a background task');
     assert.ok(existsSync(join(target, '.claude', 'board-inbox.sh')));
   } finally { rmSync(target, { recursive: true, force: true }); }

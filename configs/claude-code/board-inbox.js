@@ -3,6 +3,8 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
 const project=process.argv[2];
+const installed=process.argv[3];
+const waitCmd=installed?`sh ${installed}/.claude/board-wait.sh <your-agent-name>`:'sh "$CLAUDE_PROJECT_DIR"/.claude/board-wait.sh <your-agent-name>';
 async function main() {
   let input=''; for await(const chunk of process.stdin) input+=chunk;
   const hook=JSON.parse(input||'{}');
@@ -19,9 +21,9 @@ async function main() {
           try {rmSync(join(wdir,f),{force:true});} catch {} return false;}
       });
     } catch {}
-    if(!live.length) console.log('[board] You are NOT reachable while idle: no waiter is running. Start one as a BACKGROUND task and start it again each time it ends: sh "$CLAUDE_PROJECT_DIR"/.claude/board-wait.sh <your-agent-name>');
+    if(!live.length) console.log('[board] You are NOT reachable while idle: no waiter is running. Start one as a BACKGROUND task and start it again each time it ends: '+waitCmd);
   } catch {}
-  if(hook.hook_event_name==='SessionStart') console.log('[board] Stay reachable while idle: once you have your agent name, start `sh "$CLAUDE_PROJECT_DIR"/.claude/board-wait.sh <your-agent-name>` as a background task, and start it again each time it ends.');
+  if(hook.hook_event_name==='SessionStart') console.log('[board] Stay reachable while idle: once you have your agent name, start `'+waitCmd+'` as a background task, and start it again each time it ends.');
   const base=process.env.BOARD_URL||'http://127.0.0.1:7777';
   const key=createHash('sha256').update(`${base}/${project}/${hook.session_id||'default'}`).digest('hex');
   const dir=join(tmpdir(),'agent-board-cursors'); mkdirSync(dir,{recursive:true});

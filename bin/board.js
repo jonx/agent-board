@@ -160,7 +160,7 @@ switch (cmd) {
     if (!registered && known.length) console.log(`existing projects: ${known.map(p => p.name).join(', ')}; creating/using "${name}"`);
     const agents = opt('--agents', 'claude').split(',').map(s => s.trim()).filter(Boolean);
     const url = (a) => `${BASE}/mcp/${name}/${a}`;
-    const promptFor = (a) => (readFileSync(join(ROOT, 'docs', 'AGENT_PROMPT.md'), 'utf8') + (a === 'claude' ? '\n' + readFileSync(join(ROOT, 'docs', 'AGENT_PROMPT_WAIT.md'), 'utf8') : '')).replaceAll('{PROJECT}', name).replaceAll('{PROVIDER}', a).replaceAll('{BOARD_URL}', BASE);
+    const promptFor = (a) => (readFileSync(join(ROOT, 'docs', 'AGENT_PROMPT.md'), 'utf8') + (a === 'claude' ? '\n' + readFileSync(join(ROOT, 'docs', 'AGENT_PROMPT_WAIT.md'), 'utf8').replaceAll('{WAIT_COMMAND}', `sh ${dir}/.claude/board-wait.sh <your-agent-name>`) : '')).replaceAll('{PROJECT}', name).replaceAll('{PROVIDER}', a).replaceAll('{BOARD_URL}', BASE);
     const MARK = '<!-- agent-board:start -->', END = '<!-- agent-board:end -->';
     const writeJson = (f, mut) => { let j = {}; if (existsSync(f)) j = JSON.parse(readFileSync(f, 'utf8')); mut(j); writeFileSync(f, JSON.stringify(j, null, 2) + '\n'); console.log('  wrote', f); };
     const addPrompt = (f, a) => {
@@ -174,7 +174,7 @@ switch (cmd) {
       if (a === 'claude') {
         writeJson(join(dir, '.mcp.json'), j => { (j.mcpServers ??= {}).board = { type: 'http', url: url('claude') }; });
         mkdirSync(join(dir, '.claude'), { recursive: true });
-        writeFileSync(join(dir, '.claude', 'board-inbox.sh'), readFileSync(join(ROOT, 'configs', 'claude-code', 'board-inbox.sh'), 'utf8').replace('__BOARD_ROOT__', ROOT)); chmodSync(join(dir, '.claude', 'board-inbox.sh'), 0o755);
+        writeFileSync(join(dir, '.claude', 'board-inbox.sh'), readFileSync(join(ROOT, 'configs', 'claude-code', 'board-inbox.sh'), 'utf8').replace('__BOARD_ROOT__', ROOT).replace('__BOARD_DIR__', dir)); chmodSync(join(dir, '.claude', 'board-inbox.sh'), 0o755);
         console.log('  wrote', join(dir, '.claude', 'board-inbox.sh'));
         writeFileSync(join(dir, '.claude', 'board-wait.sh'), readFileSync(join(ROOT, 'configs', 'claude-code', 'board-wait.sh'), 'utf8').replace('__BOARD_ROOT__', ROOT).replace('__BOARD_PROJECT__', name)); chmodSync(join(dir, '.claude', 'board-wait.sh'), 0o755);
         console.log('  wrote', join(dir, '.claude', 'board-wait.sh'));
