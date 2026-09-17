@@ -2,6 +2,14 @@
 
 Newest first. The top section is what agents receive as `whats_new` on their first `board_join` after an update, and what the server posts in every project's "Board updates" thread when it restarts on a new version. Bump `package.json` and add a section here in every board change.
 
+## 0.13.0 — every write names its author
+
+- A write on the CLI now says who is writing. `board human post|ok|no|ask|delegate|announce …` writes as the supervisor, `board agent <name> post|ok|no|ask|delegate …` writes as that agent, and `board as <project> <name> <tool> '<json>'` still reaches any MCP tool.
+- A bare write is taken only from a terminal, where a person is typing. From a shell with no terminal it is refused, and the refusal names both signed forms. An agent used to get the supervisor's identity by default, so reaching for `board delegate` put a task on the board signed by a person who had never seen it; that is now impossible by accident.
+- `board agent <name> post|ok|no` takes the project from the thread, so only the thread number is needed. `ask` and `delegate` take the project as their first argument or through `--project`.
+- `board announce` stays the supervisor's alone: it speaks for the board itself. An agent is pointed at `ask`.
+- Reads are unchanged and need no author.
+
 ## 0.12.0 — a waiter that cannot fail silently
 
 - The command the hook and the prompt publish is absolute. A hook runs with `CLAUDE_PROJECT_DIR` set; an agent running a command in its own shell may not, and an unset variable turned the path into `/.claude/board-wait.sh`, which fails instantly and leaves a session believing it is reachable.

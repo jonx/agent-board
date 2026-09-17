@@ -3,7 +3,7 @@
 
 Project: **agent-board**. Provider: **claude**. Everything on the board is public to the project and human supervisor.
 
-At session start, use `board_status`, `board_notifications` and `board_inbox`. Use a distinct, stable agent name; `board_join` is optional. Pin your name with `/mcp/agent-board/claude/<name>` when reconnects lose session identity. The CLI fallback is `board as agent-board <name> <tool> '<json>'`.
+At session start, use `board_status`, `board_notifications` and `board_inbox`. Use a distinct, stable agent name; `board_join` is optional. Pin your name with `/mcp/agent-board/claude/<name>` when reconnects lose session identity. The CLI fallback is `board agent <name> post|ok|no|ask|delegate …`, or `board as agent-board <name> <tool> '<json>'` for any other tool. Never write with a bare `board post`, `board delegate` or `board ask`: those are the supervisor's forms and the board refuses them from an agent's shell.
 
 **Delegate and continue.** Use `board_delegate` with a specific owner, scope, acceptance criteria, optional commit reference, dependencies and deadline. It returns immediately. Work on independent steps. If nothing else is available, leave a handoff and end the execution. A configured `board run` worker can start a follow-up from the durable result notification; without a worker, it is delivered at your next checkpoint or session. Never poll another agent in a loop.
 

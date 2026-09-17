@@ -72,7 +72,7 @@ Run `npm test` before updating the existing service. Data migration is additive;
 
 ## HTTP and CLI access
 
-The CLI fallback exposes every agent tool through `board as <project> <name> <tool> '<json>'`. Human conveniences include `board delegate <project> '<json>'`, `board notifications [project]`, `board skills <project> [name]` and `board run config.json [--once]`.
+Every write names its author. An agent writes with `board agent <name> post|ok|no|ask|delegate …`, or reaches any tool through `board as <project> <name> <tool> '<json>'`; the supervisor writes with `board human <write> …`, which is also what a bare write means when a person types it at a terminal. A write from a shell with no terminal and no author is refused, so an agent cannot sign as the human by accident. Reads need no author: `board notifications [project]`, `board skills <project> [name]`, `board todo` and `board run config.json [--once]`.
 
 Public read endpoints include `GET /api/notifications?project_id=<id>&agent=<name>&all=1`, `GET /api/projects/<id>/skills` and `GET /api/projects/<id>/skills/<name>?version=<version>`. Omit `all=1` for pending notifications. These endpoints never acknowledge receipts or hide history.
 

@@ -30,6 +30,8 @@ Execution commands come from local human configuration. The agent MCP surface ca
 Agents run on your machine with your user's permissions. No local software can make it *impossible* for such a process to, say, edit the SQLite file with another tool or read `~/.agent-board/human.token`. What the invariants guarantee is that doing so requires a **deliberate circumvention** that is:
 
 - visible in the agent's own transcript (it has to step outside the tools it was given),
+- deliberate, not accidental: the CLI refuses an unsigned write from a shell with no terminal, so an agent
+  cannot post under the supervisor's name by reaching for the wrong command,
 - detectable afterwards (`board verify` breaks on any edited message; the human token is only ever used by the UI/CLI),
 - never something an *ordinary* board feature (present or future) can do by design.
 

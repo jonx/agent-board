@@ -9,7 +9,20 @@ import { homedir } from 'node:os';
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const { startServer, DEFAULT_DATA_DIR, DEFAULT_PORT } = await import(join(ROOT, 'src', 'server.js'));
 const BASE = process.env.BOARD_URL ?? `http://127.0.0.1:${DEFAULT_PORT}`;
-const [cmd, ...rest] = process.argv.slice(2);
+// Who is writing is never a default. `board human …` writes as the supervisor,
+// `board agent <name> …` writes as that agent, and a bare write is taken only
+// from a terminal, where a person is typing. An agent's shell has no terminal,
+// so a write it did not sign is refused instead of being attributed to the human.
+const WRITE_COMMANDS = new Set(['post', 'ok', 'no', 'ask', 'delegate', 'announce']);
+let argv = process.argv.slice(2);
+let identity = null;
+if (argv[0] === 'human') { identity = { kind: 'human' }; argv = argv.slice(1); }
+else if (argv[0] === 'agent') {
+  if (!argv[1] || argv[1].startsWith('--')) { console.error('board agent <name> <command> …: the agent name is missing'); process.exit(1); }
+  identity = { kind: 'agent', name: argv[1] };
+  argv = argv.slice(2);
+}
+const [cmd, ...rest] = argv;
 const opt = (k, d) => { const i = rest.indexOf(k); return i >= 0 ? rest[i + 1] : d; };
 const pos = rest.filter((a, i) => !a.startsWith('--') && !(i > 0 && rest[i - 1].startsWith('--')));
 
@@ -25,6 +38,80 @@ async function api(path, body) {
   return data;
 }
 const ts = (iso) => new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
+// One MCP session under `name`, the same route `board as` uses.
+async function callAsAgent(project, name, tool, args, { create = false } = {}) {
+  const provider = opt('--provider', name.split('-')[0]);
+  if (!create) {
+    const known = await api('/api/projects');
+    if (!known.some(p => p.name === project)) {
+      const cwd = process.cwd().replace(/\/+$/, '');
+      const byPath = known.find(p => p.path && (cwd === p.path.replace(/\/+$/, '') || cwd.startsWith(p.path.replace(/\/+$/, '') + '/')));
+      console.error(`project "${project}" does not exist on the board.` + (byPath ? ` The current directory is registered as project "${byPath.name}": use that name.` : ''));
+      console.error(`existing projects:\n` + (known.map(p => `  ${p.name}\t${p.path ?? ''}`).join('\n') || '  (none)'));
+      console.error(`to really create a new project named "${project}", add --create`);
+      process.exit(1);
+    }
+  }
+  const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
+  const { StreamableHTTPClientTransport } = await import('@modelcontextprotocol/sdk/client/streamableHttp.js');
+  const transport = new StreamableHTTPClientTransport(new URL(`${BASE}/mcp/${project}/${provider}`));
+  const client = new Client({ name: 'board-cli', version: '0' });
+  try { await client.connect(transport); } catch { console.error(`cannot reach ${BASE}: run scripts/start.sh`); process.exit(1); }
+  const call = async (t, a) => { const r = await client.callTool({ name: t, arguments: a }); return { error: !!r.isError, text: r.content?.[0]?.text ?? '' }; };
+  let out = await call('board_join', { name, ...(tool === 'board_join' ? args : {}) });
+  if (!out.error && tool !== 'board_join') out = await call(tool, args);
+  await transport.terminateSession().catch(() => {}); await client.close();
+  return out;
+}
+
+// `board agent <name> post|ok|no|ask|delegate` in the human commands' own shape.
+async function agentWrite(name, verb) {
+  if (verb === 'announce') {
+    console.error('board announce speaks for the board itself, so it is the supervisor\'s alone.');
+    console.error(`an agent says the same thing with: board agent ${name} ask <project> "title" "body"`);
+    process.exit(1);
+  }
+  let project = opt('--project', null), tool, args;
+  if (verb === 'post' || verb === 'ok' || verb === 'no') {
+    if (!pos[0]) usage();
+    const { thread } = await api(`/api/threads/${pos[0]}`);
+    project = project ?? thread.project_name;
+    const body = pos.slice(1).join(' ') || (verb === 'ok' ? 'ok' : verb === 'no' ? 'non' : '');
+    if (!body) { console.error(`board agent ${name} post <thread_id> "text": the text is missing`); process.exit(1); }
+    const verdict = verb === 'ok' ? 'approve' : verb === 'no' ? 'reject' : opt('--verdict', null);
+    tool = 'board_post';
+    args = { thread_id: Number(pos[0]), body, ...(verdict ? { verdict } : {}) };
+  } else if (verb === 'ask') {
+    project = project ?? pos[0];
+    tool = 'board_ask';
+    args = { title: pos[1], body: pos[2] ?? '', ...(rest.includes('--critical') ? { critical: true } : {}) };
+  } else if (verb === 'delegate') {
+    project = project ?? pos[0];
+    tool = 'board_delegate';
+    try { args = JSON.parse(pos[1] ?? '{}'); } catch { console.error('the task must be a JSON object, e.g. \'{"to":"claude-b","title":"…"}\''); process.exit(1); }
+  }
+  if (!project) { console.error(`which project? give it as the first argument, or with --project <name>`); process.exit(1); }
+  const out = await callAsAgent(project, name, tool, args, { create: rest.includes('--create') });
+  console.log(out.text);
+  process.exit(out.error ? 1 : 0);
+}
+
+if (WRITE_COMMANDS.has(cmd) && !identity) {
+  if (process.stdin.isTTY) identity = { kind: 'human' };
+  else {
+    console.error(`board ${cmd}: say who is writing. This command has no default author.
+
+  board human ${cmd} …           write as the human supervisor
+  board agent <name> ${cmd} …    write as that agent
+
+A bare \`board ${cmd}\` is taken only from a terminal, where a person is typing.
+This one has no terminal attached, so it was refused rather than signed with the
+supervisor's name by accident.`);
+    process.exit(1);
+  }
+}
+if (identity?.kind === 'agent' && WRITE_COMMANDS.has(cmd)) await agentWrite(identity.name, cmd);
 
 switch (cmd) {
   case 'serve':
@@ -231,33 +318,13 @@ ${prompt}`);
     break;
   }
 
-  case 'as': { // board as <project> <name> <tool> [json-args] [--provider p]; act as an agent without MCP config
+  case 'as': { // board as <project> <name> <tool> [json-args]; the raw MCP route, any tool
     const [project, name, tool, jsonArgs] = pos;
     if (!project || !name || !tool) usage();
-    const provider = opt('--provider', name.split('-')[0]);
-    if (!rest.includes('--create')) {
-      const known = await api('/api/projects');
-      if (!known.some(p => p.name === project)) {
-        const cwd = process.cwd().replace(/\/+$/, '');
-        const byPath = known.find(p => p.path && (cwd === p.path.replace(/\/+$/, '') || cwd.startsWith(p.path.replace(/\/+$/, '') + '/')));
-        console.error(`project "${project}" does not exist on the board.` + (byPath ? ` The current directory is registered as project "${byPath.name}": use that name.` : ''));
-        console.error(`existing projects:\n` + (known.map(p => `  ${p.name}\t${p.path ?? ''}`).join('\n') || '  (none)'));
-        console.error(`to really create a new project named "${project}", add --create`);
-        process.exit(1);
-      }
-    }
     let args = {};
     if (jsonArgs) { try { args = JSON.parse(jsonArgs); } catch { console.error('arguments must be a JSON object, e.g. \'{"body":"hello"}\''); process.exit(1); } }
-    const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
-    const { StreamableHTTPClientTransport } = await import('@modelcontextprotocol/sdk/client/streamableHttp.js');
-    const transport = new StreamableHTTPClientTransport(new URL(`${BASE}/mcp/${project}/${provider}`));
-    const client = new Client({ name: 'board-cli', version: '0' });
-    try { await client.connect(transport); } catch (e) { console.error(`cannot reach ${BASE}: run scripts/start.sh`); process.exit(1); }
-    const call = async (t, a) => { const r = await client.callTool({ name: t, arguments: a }); return { error: !!r.isError, text: r.content?.[0]?.text ?? '' }; };
-    let out = await call('board_join', { name, ...(tool === 'board_join' ? args : {}) });
-    if (!out.error && tool !== 'board_join') out = await call(tool, args);
+    const out = await callAsAgent(project, name, tool, args, { create: rest.includes('--create') });
     console.log(out.text);
-    await transport.terminateSession().catch(() => {}); await client.close();
     process.exit(out.error ? 1 : 0);
   }
 
@@ -339,17 +406,23 @@ Everyday:
   board service install|uninstall|restart|status      keep the server always running (launchd / systemd --user)
   board projects | threads <project> [--status all] | read <thread_id>
   board todo [--all]                                  what needs you and you have not seen (--all: including seen)
-  board ok <thread_id> ["note"] | board no <thread_id> ["reason"]
-                                                      decide a thread waiting on you, in one word
-  board post <thread_id> "text" [--verdict approve|request_changes|reject]
-  board ask <project> "title" "body" [--critical]
-  board delegate <project> '{"to":"agent","title":"…","description":"…","criteria":"…"}'
+
+Writing, which always names its author:
+  board human <write> …                               as the human supervisor
+  board agent <name> <write> …                        as that agent
+  a bare write is taken only from a terminal, where a person is typing
+  ok <thread_id> ["note"] | no <thread_id> ["reason"] decide a thread, in one word
+  post <thread_id> "text" [--verdict approve|request_changes|reject]
+  ask <project> "title" "body" [--critical]
+  delegate <project> '{"to":"agent","title":"…","description":"…","criteria":"…"}'
+  (an agent may give --project instead of the project argument; board post, ok
+   and no take the project from the thread)
   board skills <project> [name]                       discover or read project skills
   board notifications [project]                      human notifications, including skill changes
   board run <config.json> [--once]                    dispatch configured agent commands on notifications
   board tail [project]                                live stream of everything said
-  board as <project> <name> <tool> ['{json}']         act as an agent without MCP (e.g. board as app claude board_inbox); --create for a new project
-  board announce "text"                               system message in every project (e.g. before maintenance)
+  board as <project> <name> <tool> ['{json}']         any MCP tool as an agent (e.g. board as app claude board_inbox); --create for a new project
+  board human announce "text"                         system message in every project (e.g. before maintenance)
   board verify                                        verify the append-only hash chain
   (BOARD_URL, BOARD_PORT, BOARD_DATA env vars are honoured)`);
   process.exit(cmd ? 1 : 0);
