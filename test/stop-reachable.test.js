@@ -44,9 +44,14 @@ async function hook(project, input) {
   return stdout.trim() ? JSON.parse(stdout) : null;
 }
 
+const toolCall = (command) =>
+  JSON.stringify({ message: { content: [{ type: 'tool_use', name: 'Bash', input: { command } }] } });
+const prose = (text) =>
+  JSON.stringify({ message: { content: [{ type: 'text', text }] } });
+
 const boardSession = () => transcript([
-  '{"type":"user","text":"do the thing"}',
-  '{"type":"tool","name":"Bash","input":"board agent claude-c post 19 \\"done\\""}',
+  prose('let us do the thing'),
+  toolCall('board agent claude-c post 19 "done"'),
 ]);
 
 test('a board session with no waiter is held and told exactly what to start', async () => {
@@ -64,7 +69,10 @@ test('it never blocks twice, so it cannot loop a session', async () => {
 });
 
 test('a session that never touched the board is left alone', async () => {
-  const path = transcript(['{"type":"user","text":"rename a variable"}', '{"type":"tool","name":"Edit"}']);
+  const path = transcript([
+    prose('rename a variable'),
+    toolCall('grep -rn name src/'),
+  ]);
   assert.equal(await hook('afsplus', { hook_event_name: 'Stop', stop_hook_active: false, transcript_path: path }), null);
 });
 
@@ -91,9 +99,49 @@ test('a waiter whose process is gone does not count as reachable', async () => {
 
 test('the name comes from the latest way the session reached the board', async () => {
   const path = transcript([
-    '{"type":"tool","input":"board as afsplus claude-old board_status"}',
-    '{"type":"tool","input":"board agent claude-new post 19 \\"later\\""}',
+    toolCall('board as afsplus claude-old board_status'),
+    toolCall('board agent claude-new post 19 "later"'),
   ]);
   const out = await hook('afsplus', { hook_event_name: 'Stop', stop_hook_active: false, transcript_path: path });
   assert.match(out.reason, /claude-new/);
+});
+
+test('prose about the board is not a command, whatever it looks like', async () => {
+  // The first version of this hook read its author's own writing and concluded
+  // his agent was called "worse". A sentence is not evidence of having acted.
+  const path = transcript([
+    prose('keep the board as the record and the address book'),
+    prose('an agent writes with board agent <name> post, never a bare board post'),
+    prose('start sh /repo/.claude/board-wait.sh ${name} as a background task'),
+    prose('worse than the gap this hook closes'),
+  ]);
+  assert.equal(
+    await hook('afsplus', { hook_event_name: 'Stop', stop_hook_active: false, transcript_path: path }),
+    null,
+    'writing about the board must never hold up a session'
+  );
+});
+
+test('a transcript cut mid-line by the tail does not confuse it', async () => {
+  const path = transcript([
+    '{"message":{"content":[{"type":"tool_use","input":{"command":"board agent claude-tr',
+    toolCall('board agent claude-real post 19 "hello"'),
+  ]);
+  const out = await hook('afsplus', { hook_event_name: 'Stop', stop_hook_active: false, transcript_path: path });
+  assert.match(out.reason, /claude-real/);
+});
+
+test('a name mentioned once in an example loses to the one the session works under', async () => {
+  // Found on the author's own transcript: writing the tests for this hook put
+  // `board as afsplus claude-old board_status` into a tool call, and taking the
+  // newest match made the hook address him as claude-old.
+  const path = transcript([
+    toolCall('board agent claude-main post 19 "morning"'),
+    toolCall('board agent claude-main post 20 "a finding"'),
+    toolCall('board agent claude-main post 21 "a delegation"'),
+    toolCall('cat > test.js <<END\nboard as afsplus claude-old board_status\nEND'),
+  ]);
+  const out = await hook('afsplus', { hook_event_name: 'Stop', stop_hook_active: false, transcript_path: path });
+  assert.match(out.reason, /claude-main/);
+  assert.doesNotMatch(out.reason, /claude-old/);
 });
