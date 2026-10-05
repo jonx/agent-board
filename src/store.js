@@ -485,7 +485,8 @@ export class Store {
       const mentioned=JSON.parse(r.mentions).some(n=>[agent.name,'all','everyone'].includes(n));
       if(!threads.has(r.thread_id)) threads.set(r.thread_id,{thread_id:r.thread_id,title:r.title,kind:r.thread_kind,status:r.status,mentions_you:false,from_human:false,messages:[]});
       const t=threads.get(r.thread_id); t.mentions_you ||= mentioned; t.from_human ||= r.author_role==='human';
-      t.messages.push({id:r.id,author:r.author,author_role:r.author_role,body:r.body,verdict:r.verdict,mentioned,created_at:r.created_at});
+      const body = r.body.length > 900 ? r.body.slice(0, 900) + ` [truncated; board_read ${r.thread_id} for the rest]` : r.body;
+      t.messages.push({id:r.id,author:r.author,author_role:r.author_role,body,verdict:r.verdict,mentioned,created_at:r.created_at});
     }
     // Priority pagination can skip older messages in the same thread: record exact delivery,
     // advancing a thread cursor only through messages already returned or authored by self.
@@ -532,6 +533,40 @@ export class Store {
         const working=this.threadAcks(t.id).some(a=>a.agent!==agent.name&&['working','blocked'].includes(a.state));
         return working || !messages.some(m=>m.author_id!==agent.id);
       }).slice(0,20).map(t=>({id:t.id,kind:t.kind,title:t.title,status:t.status,created_at:t.created_at}));
+  }
+
+  /** For the Stop hooks (Codex, and the Claude plugin): does the board still expect
+   *  something from a session of this provider on this project? Pure read. */
+  hookStopCheck(projectId, provider) {
+    const members = this.members(projectId).filter(a => a.provider === provider && a.role === 'agent' && !a.paused_reason);
+    const waiting = [];
+    let undelivered = 0;
+    for (const a of members) {
+      for (const t of this.waitingOnAgent(a, projectId)) waiting.push({ agent: a.name, thread_id: t.id, title: t.title });
+      try { undelivered += this.db.prepare(`SELECT count(*) AS n FROM notifications n JOIN deliveries d ON d.notification_id = n.id WHERE n.project_id = ? AND d.agent_id = ? AND d.received_at IS NULL`).get(projectId, a.id).n; } catch {}
+    }
+    let fresh = 0;
+    if (members.length) {
+      const names = members.map(a => a.name);
+      for (const a of members) {
+        fresh = Math.max(fresh, this.db.prepare(`
+          SELECT count(*) AS n FROM messages m JOIN agents au ON au.id = m.author_id
+          LEFT JOIN agent_reads r ON r.thread_id = m.thread_id AND r.agent_id = ?1
+          WHERE m.project_id = ?2 AND m.author_id <> ?1 AND m.kind <> 'system'
+            AND m.id > COALESCE(r.last_read_message_id, 0)
+            AND NOT EXISTS (SELECT 1 FROM message_reads x WHERE x.agent_id = ?1 AND x.message_id = m.id)
+            AND (au.role = 'human' OR EXISTS (SELECT 1 FROM json_each(m.mentions) WHERE value IN (SELECT value FROM json_each(?3)) OR value IN ('all','everyone')))`)
+          .get(a.id, projectId, JSON.stringify(names.concat(provider))).n);
+        if (fresh) break;
+      }
+    }
+    if (!waiting.length && !undelivered && !fresh) return { block: false };
+    const parts = [];
+    if (waiting.length) parts.push(`${waiting.length} thread(s) still waiting on you: ${[...new Set(waiting.map(w => `#${w.thread_id} ${w.title}`))].slice(0, 3).join(' | ')}`);
+    if (undelivered) parts.push(`${undelivered} notification(s) not yet received (board_notifications, then board_receive)`);
+    if (fresh) parts.push(`${fresh} unread message(s) from the human or mentioning you`);
+    return { block: true,
+      reason: `[board] Before you stop: ${parts.join('; ')}. Call board_inbox and board_notifications now, answer or board_ack each item (ack "declined" if it is not yours, so others stop waiting), then board_journal a handoff. Then stop.` };
   }
 
   // ---------- tasks ----------

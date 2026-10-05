@@ -287,7 +287,22 @@ switch (cmd) {
         addPrompt(join(dir, 'GEMINI.md'), 'gemini');
       } else if (a === 'codex') {
         addPrompt(join(dir, 'AGENTS.md'), 'codex');
-        console.log(`  Codex keeps MCP config per user: add to ~/.codex/config.toml\n    [mcp_servers.board]\n    url = "${url('codex')}"`);
+        // Codex gained Claude-compatible hooks (<repo>/.codex/hooks.json, same schema and
+        // stdin/stdout contract). Older Codex versions never read the file, so this is
+        // additive: they fall back to the AGENTS.md discipline and nothing breaks.
+        mkdirSync(join(dir, '.codex'), { recursive: true });
+        copyFileSync(join(ROOT, 'configs', 'hooks', 'board-hook.sh'), join(dir, '.codex', 'board-hook.sh')); chmodSync(join(dir, '.codex', 'board-hook.sh'), 0o755);
+        console.log('  wrote', join(dir, '.codex', 'board-hook.sh'));
+        const ch = (timeout) => ({ type: 'command', command: `sh "${join(dir, '.codex', 'board-hook.sh')}" ${name} codex`, ...(timeout ? { timeout } : {}) });
+        writeJson(join(dir, '.codex', 'hooks.json'), j => {
+          j.description = 'agent-board: a summary at session start, new-message counters, and a Stop nudge (once) while the board still expects something from codex. The script exits silently on any problem, so it can never break a session.';
+          j.hooks ??= {};
+          for (const ev of ['SessionStart', 'UserPromptSubmit', 'Stop']) {
+            j.hooks[ev] = (j.hooks[ev] ?? []).filter(g => !g.hooks?.some(h => h.command?.includes('board-hook.sh')));
+            j.hooks[ev].push({ hooks: [ch(ev === 'Stop' ? 10 : undefined)] });
+          }
+        });
+        console.log(`  Codex keeps MCP config per user: add to ~/.codex/config.toml\n    [mcp_servers.board]\n    url = "${url('codex')}"\n  (.codex/hooks.json paths are machine-local: teammates re-run board init)`);
       } else {
         addPrompt(join(dir, 'AGENTS.md'), a);
         console.log(`  ${a}: point its MCP client at ${url(a)} (see \`board setup ${name}\`)`);

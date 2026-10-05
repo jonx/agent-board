@@ -6,7 +6,7 @@ const terminal = ['done','failed','declined','cancelled'];
 const bad = message => { throw new BoardError('bad_input',message); };
 const conflict = message => { throw new BoardError('conflict',message); };
 const required = (value, name, max=20000) => {
-  if(typeof value!=='string' || !value.trim() || value.length>max) bad(`${name} must contain 1–${max} characters`);
+  if(typeof value!=='string' || !value.trim() || value.length>max) bad(`${name} must contain 1-${max} characters`);
   return value.trim();
 };
 const seeds = readdirSync(new URL('../skills/',import.meta.url)).map(name => {
@@ -120,7 +120,7 @@ export const collaborationMethods = {
       this.db.prepare('UPDATE task_details SET state=?,result=COALESCE(?,result),ref=COALESCE(?,ref),version=version+1 WHERE task_id=?').run(next,result??null,ref??null,id);
       if(state) {
         this.post(actor,{threadId:t.thread_id,notify:false,body:`Task #${id}: ${next}${result?'\n'+result:''}${ref?'\nReference: '+ref:''}`});
-        this.notify(projectId,t.requester_id,`task.${next}`,`${t.title}: ${next}${result?' — '+result.slice(0,300):''}`,{taskId:id,threadId:t.thread_id,priority:['accepted','doing'].includes(next)?0:1});
+        this.notify(projectId,t.requester_id,`task.${next}`,`${t.title}: ${next}${result?': '+result.slice(0,300):''}`,{taskId:id,threadId:t.thread_id,priority:['accepted','doing'].includes(next)?0:1});
         if(state==='cancelled'&&t.owner_id!==actor.id) this.notify(projectId,t.owner_id,'task.cancelled',`${t.title}: cancelled`,{taskId:id,threadId:t.thread_id,priority:2});
         if(terminal.includes(next)) {
           this.db.prepare('UPDATE claims SET released_at=? WHERE task_id=? AND agent_id=? AND released_at IS NULL').run(now(),id,t.owner_id);
@@ -229,8 +229,8 @@ export const collaborationMethods = {
   // A human-configured runner reserves a batch; reading alerts never consumes them.
   reserveDelivery(actor,projectId,agentName,{seconds=300,max_runs_per_hour=30}={}) {
     this.requireHuman(actor,'dispatch an agent');
-    if(!Number.isFinite(seconds)||seconds<1||seconds>3600) bad('seconds must be 1–3600');
-    if(!Number.isInteger(max_runs_per_hour)||max_runs_per_hour<1||max_runs_per_hour>300) bad('max_runs_per_hour must be 1–300');
+    if(!Number.isFinite(seconds)||seconds<1||seconds>3600) bad('seconds must be 1-3600');
+    if(!Number.isInteger(max_runs_per_hour)||max_runs_per_hour<1||max_runs_per_hour>300) bad('max_runs_per_hour must be 1-300');
     const a=this.taskMember(agentName,projectId);
     if(a.paused_reason||this.getProject(projectId).archived) return null;
     return this.atomic(()=> {

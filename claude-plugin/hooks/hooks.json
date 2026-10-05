@@ -1,0 +1,14 @@
+{
+  "description": "Board awareness: a line at session start, new-message counters before each prompt, and one nudge at Stop while the board still expects something from this session. The script exits silently when the board is unreachable or anything is unexpected.",
+  "hooks": {
+    "SessionStart": [
+      { "hooks": [{ "type": "command", "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/board-hook.sh\"" }] }
+    ],
+    "UserPromptSubmit": [
+      { "hooks": [{ "type": "command", "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/board-hook.sh\"" }] }
+    ],
+    "Stop": [
+      { "hooks": [{ "type": "command", "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/board-hook.sh\"", "timeout": 10 }] }
+    ]
+  }
+}

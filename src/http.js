@@ -116,6 +116,17 @@ export function createHttpServer({ store, humanToken, uiFile, registry = new Ses
 
     // ---- reads ----
     if (req.method === 'GET') {
+      if (p === '/api/hook/stop') { // Stop-hook check: ?project=<name>&provider=codex
+        const pr = store.getProject(q.get('project') ?? '');
+        if (!pr) return json(res, 200, { block: false });
+        return json(res, 200, store.hookStopCheck(pr.id, (q.get('provider') ?? 'claude').toLowerCase()));
+      }
+      if (p === '/api/hook/project') { // which project owns this directory (plugin hooks, bridge)
+        const cwd = (q.get('cwd') ?? '').replace(/\/+$/, '');
+        const hit = store.listProjects().filter(x => x.path && !x.archived).map(x => ({ ...x, path: x.path.replace(/\/+$/, '') }))
+          .filter(x => cwd === x.path || cwd.startsWith(x.path + '/')).sort((a, b) => b.path.length - a.path.length)[0];
+        return json(res, 200, { project: hit?.name ?? null });
+      }
       if (p === '/api/notifications') return json(res,200,store.db.prepare(`SELECT n.*,a.name AS agent,d.received_at,d.attempts,d.last_error FROM notifications n JOIN deliveries d ON d.notification_id=n.id JOIN agents a ON a.id=d.agent_id WHERE (? IS NULL OR n.project_id=?) AND (? IS NULL OR a.name=?) AND (?=1 OR d.received_at IS NULL) ORDER BY n.priority DESC,n.id DESC LIMIT 200`).all(q.get('project_id'),q.get('project_id'),q.get('agent'),q.get('agent'),q.get('all')==='1'?1:0));
       if (p === '/api/projects') return json(res, 200, store.listProjects());
       if (p === '/api/agents') return json(res, 200, store.listAgents());

@@ -6,15 +6,15 @@ import { setTimeout as delay } from 'node:timers/promises';
 
 export function validateRunnerConfig(config) {
   if(!Array.isArray(config.agents)||!config.agents.length) throw new Error('config.agents must be a non-empty array');
-  if(config.interval_ms!==undefined&&(!Number.isFinite(config.interval_ms)||config.interval_ms<1000||config.interval_ms>60000)) throw new Error('interval_ms must be 1000–60000');
+  if(config.interval_ms!==undefined&&(!Number.isFinite(config.interval_ms)||config.interval_ms<1000||config.interval_ms>60000)) throw new Error('interval_ms must be 1000-60000');
   const identities=new Set();
   for(const a of config.agents) {
     if(!a.project||!a.agent||!a.cwd||!Array.isArray(a.command)||!a.command.length||a.command.some(x=>typeof x!=='string')) throw new Error('each agent needs project, agent, cwd and command (argv array)');
     if(!isAbsolute(a.cwd)) throw new Error('cwd must be absolute');
     const key=`${a.project}/${a.agent}`;
     if(identities.has(key)) throw new Error('duplicate runner identity'); identities.add(key);
-    if(a.max_runs_per_hour!==undefined&&(!Number.isInteger(a.max_runs_per_hour)||a.max_runs_per_hour<1||a.max_runs_per_hour>300)) throw new Error('max_runs_per_hour must be 1–300');
-    if(a.timeout_seconds!==undefined&&(!Number.isFinite(a.timeout_seconds)||a.timeout_seconds<1||a.timeout_seconds>3500)) throw new Error('timeout_seconds must be 1–3500');
+    if(a.max_runs_per_hour!==undefined&&(!Number.isInteger(a.max_runs_per_hour)||a.max_runs_per_hour<1||a.max_runs_per_hour>300)) throw new Error('max_runs_per_hour must be 1-300');
+    if(a.timeout_seconds!==undefined&&(!Number.isFinite(a.timeout_seconds)||a.timeout_seconds<1||a.timeout_seconds>3500)) throw new Error('timeout_seconds must be 1-3500');
   }
 }
 export async function executeAgent(entry,prompt,{base,signal,onOutput=()=>{}}={}) {

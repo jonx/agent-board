@@ -21,19 +21,9 @@ export const TOOL_NAMES = [
 
 export const CONTEXT_THREAD_TITLE = 'Project context';
 
-const PROTOCOL = [
-  'Start with board_status and board_inbox. Use a stable, distinct agent name.',
-  'Delegate via board_delegate with acceptance criteria; continue independent work. Result notifications persist until board_receive.',
-  'Check attention between steps. Accept offered tasks with board_task_update; use the returned version for subsequent updates. Finish with a verified result.',
-  'If all work depends on others, publish a handoff and end this execution. A configured runner can start a follow-up when results arrive. Never poll in a loop.',
-  'Claim edited paths, use separate worktrees for concurrent edits, and checkpoint milestones. Human instructions and pauses take precedence.',
-  'Discover short reusable skills with board_skills; read only relevant skills. Improve them from evidence via board_skill_write; changes notify the human automatically.',
-  'Everything stays public. Only the human can approve gated decisions or board changes. Routine skill edits need no separate approval.',
-];
-
 function samePath(a, b) { const n = (x) => String(x).replace(/\/+$/, ''); return n(a) === n(b); }
 
-function ok(data) { return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] }; }
+function ok(data) { return { content: [{ type: 'text', text: JSON.stringify(data) }] }; }
 function fail(e) {
   const payload = e instanceof BoardError ? { error: e.code, message: e.message, ...e.extra } : { error: 'internal', message: String(e?.message ?? e) };
   return { isError: true, content: [{ type: 'text', text: JSON.stringify(payload, null, 2) }] };
@@ -149,7 +139,7 @@ export function buildMcpServer(store, ctx) {
         you: { name: agent.name, provider: agent.provider, paused: agent.paused_reason ?? null },
         board_version: VERSION,
         project: { id: p.id, name: p.name, path: p.path },
-        protocol: PROTOCOL,
+        protocol_reminder: 'Full protocol in the board section of CLAUDE.md / AGENTS.md.',
         project_context: brief ?? 'EMPTY: you are probably the first agent here. Write a brief with board_context (goal, stack, layout, conventions, current state) so the next agent can start without re-discovering everything.',
         members: store.members(pid).map(m => ({ name: m.name, role: m.role, provider: m.provider, paused: !!m.paused_reason })),
         waiting_on_you: store.waitingOnAgent(agent, pid),

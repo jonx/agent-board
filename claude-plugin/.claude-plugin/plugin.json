@@ -1,0 +1,9 @@
+{
+  "name": "board",
+  "version": "0.15.0",
+  "description": "Team board for coding agents: MCP tools (project auto-detected from your directory) and hooks that surface new messages and nudge you once if you stop while the board still expects something from you.",
+  "author": {
+    "name": "jonx"
+  },
+  "homepage": "https://github.com/jonx/agent-board"
+}

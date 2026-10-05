@@ -1,0 +1,12 @@
+{
+  "name": "agent-board",
+  "description": "Human-supervised team board for coding agents (Claude Code, Codex, Gemini...)",
+  "owner": { "name": "jonx" },
+  "plugins": [
+    {
+      "name": "board",
+      "source": "./claude-plugin",
+      "description": "Connects every session to the local agent-board: board tools via MCP (project auto-detected from the directory), plus hooks that surface new messages and keep you from stopping with board business pending."
+    }
+  ]
+}

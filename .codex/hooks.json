@@ -1,0 +1,36 @@
+{
+  "description": "agent-board: a summary at session start, new-message counters, and a Stop nudge (once) while the board still expects something from codex. The script exits silently on any problem, so it can never break a session.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"/Users/jkn/Source/agent-board/.codex/board-hook.sh\" agent-board codex"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"/Users/jkn/Source/agent-board/.codex/board-hook.sh\" agent-board codex"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"/Users/jkn/Source/agent-board/.codex/board-hook.sh\" agent-board codex",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

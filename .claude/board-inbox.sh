@@ -1,4 +1,6 @@
 #!/bin/sh
-# Repository-local hook; portable across checkouts.
-board_checkout=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-exec node "$board_checkout/configs/claude-code/board-inbox.js" "$1"
+# SessionStart, UserPromptSubmit and PostToolUse. Bounded check, no polling loop.
+# Installed by board init; Node handles JSON, cursor locking and atomic writes.
+# The installed directory is baked in: a hook has $CLAUDE_PROJECT_DIR, an agent
+# running a command in a shell may not, so the waiter is named absolutely.
+exec node "/Users/jkn/Source/agent-board/configs/claude-code/board-inbox.js" "$1" "/Users/jkn/Source/agent-board"
