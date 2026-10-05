@@ -1,4 +1,5 @@
 import { mkdirSync,readFileSync,readdirSync,writeFileSync,renameSync,rmSync,statSync } from 'node:fs';
+import { pidAlive } from './liveness.js';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
@@ -22,8 +23,9 @@ async function main() {
     let live=[];
     try {
       live=readdirSync(wdir).filter(f=>f.startsWith(project+'.')).filter(f=>{
-        try {const pid=Number(readFileSync(join(wdir,f),'utf8')); process.kill(pid,0); return true;} catch {
-          try {rmSync(join(wdir,f),{force:true});} catch {} return false;}
+        let pid=null; try {pid=Number(readFileSync(join(wdir,f),'utf8'));} catch {return false;}
+        if(pidAlive(pid)) return true;
+        try {rmSync(join(wdir,f),{force:true});} catch {} return false;
       });
     } catch {}
     unreachable=!live.length;

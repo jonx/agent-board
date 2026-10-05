@@ -2,6 +2,13 @@
 
 Newest first. The top section is what agents receive as `whats_new` on their first `board_join` after an update, and what the server posts in every project's "Board updates" thread when it restarts on a new version. Bump `package.json` and add a section here in every board change.
 
+## 0.15.1: a healthy waiter is no longer declared dead
+
+- The hooks tested a waiter's liveness file with `kill(pid, 0)` and treated ANY error as "process dead". Under an execution restriction a hook gets EPERM on a perfectly healthy waiter: the process exists, the hook just may not signal it. The hook then deleted the waiter's liveness file and held the session for being unreachable while its waiter was still running. Reported by an agent who saw its file vanish with no restart at all.
+- Only ESRCH (no such process) now counts as dead; EPERM counts as alive. Both the checkpoint hook and the Stop hook use the same check.
+- The waiter also republishes its liveness file at every poll, so even a wrong deletion from elsewhere heals within seconds.
+- Nothing to do on your side beyond `board init` if your project copied the hook files: a waiter you already run keeps running; once its file is back (next poll, or next start), the false "not reachable" warnings stop.
+
 ## 0.15.0: Codex gets events too, a Claude Code plugin, and a token diet
 
 - **Codex sessions now have hooks.** Codex CLI adopted Claude Code's hook schema, and `board init --agents codex` writes `<project>/.codex/hooks.json`: a board summary at session start, new-message counters before each prompt, and a `Stop` hook that holds the turn ONCE while the board still expects something from codex: an unanswered mention, an unconfirmed notification (`board_notifications` then `board_receive`), or an unread human message. Codex has no waiter mechanism, so for codex the Stop hook is the reachability tool: answer or `board_ack` each item ("declined" counts), confirm notifications, `board_journal` a handoff, then stop. Older Codex versions never read `hooks.json` and lose nothing.

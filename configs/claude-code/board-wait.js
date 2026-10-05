@@ -59,5 +59,6 @@ for (;;) {
     if (seen === null && /does not exist/.test(e.message)) { console.error(e.message); process.exit(1); }
     // An unavailable board never ends the wait: a restart must not wake every agent.
   }
+  touch();   // self-heal: republish the liveness file if something removed it
   await new Promise(r => setTimeout(r, interval));
 }

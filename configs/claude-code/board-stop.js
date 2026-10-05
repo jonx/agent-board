@@ -13,6 +13,7 @@
 // A session that never touched the board is never blocked.
 import { readFileSync, readdirSync, rmSync, statSync, openSync, readSync, closeSync } from 'node:fs';
 import { join } from 'node:path';
+import { pidAlive } from './liveness.js';
 import { tmpdir } from 'node:os';
 
 const project = process.argv[2];
@@ -120,8 +121,11 @@ function waiterLive(name) {
   try { entries = readdirSync(dir); } catch { return false; }
   for (const f of entries) {
     if (f !== wanted) continue;
-    try { process.kill(Number(readFileSync(join(dir, f), 'utf8')), 0); return true; }
-    catch { try { rmSync(join(dir, f), { force: true }); } catch {} return false; }
+    let pid = null;
+    try { pid = Number(readFileSync(join(dir, f), 'utf8')); } catch { return false; }
+    if (pidAlive(pid)) return true;
+    try { rmSync(join(dir, f), { force: true }); } catch {}
+    return false;
   }
   return false;
 }

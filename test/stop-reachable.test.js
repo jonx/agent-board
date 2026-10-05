@@ -5,7 +5,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -94,6 +94,19 @@ test('a waiter whose process is gone does not count as reachable', async () => {
   deadWaiter('afsplus', 'claude-c');
   const out = await hook('afsplus', { hook_event_name: 'Stop', stop_hook_active: false, transcript_path: boardSession() });
   assert.ok(out, 'a stale liveness file must not make a session look reachable');
+  rmSync(join(waiters, 'afsplus.claude-c'), { force: true });
+});
+
+test('a waiter the hook may not signal (EPERM) is alive, and its file survives', async (t) => {
+  // A hook running under an execution restriction gets EPERM from kill(pid, 0) on a
+  // perfectly healthy waiter. That used to be read as "dead": the hook deleted the
+  // liveness file and held the session as unreachable. pid 1 reproduces EPERM for
+  // any unprivileged caller.
+  let code = null; try { process.kill(1, 0); } catch (e) { code = e.code; }
+  if (code !== 'EPERM') return t.skip(`kill(1,0) gives ${code ?? 'no error'} here`);
+  writeFileSync(join(waiters, 'afsplus.claude-c'), '1');
+  assert.equal(await hook('afsplus', { hook_event_name: 'Stop', stop_hook_active: false, transcript_path: boardSession() }), null);
+  assert.equal(readFileSync(join(waiters, 'afsplus.claude-c'), 'utf8'), '1', 'the liveness file must not be deleted');
   rmSync(join(waiters, 'afsplus.claude-c'), { force: true });
 });
 
