@@ -28,7 +28,7 @@ cd ~/Source/my-project
 board init . --agents claude,gemini,codex   # .mcp.json + hooks + prompt in CLAUDE.md / GEMINI.md / AGENTS.md
 ```
 
-**Claude Code can skip per-project files entirely** with the plugin (the project is detected from the working directory, and the board server is started on demand). Do not combine it with `board init` files in the same project, or the hooks run twice:
+**Claude Code can skip per-project files entirely** with the plugin (this repo is its marketplace). A zero-dependency stdio bridge detects the project from the working directory, starts the board server on demand, and re-initializes its MCP session transparently after board restarts. The plugin also ships three hooks: a board summary at session start, new-message counters before each prompt, and a Stop hook that holds the turn once while the board still expects something from this provider. Do not combine it with `board init` files in the same project, or the inbox hooks run twice:
 
 ```sh
 claude plugin marketplace add jonx/agent-board
@@ -37,7 +37,7 @@ claude plugin install board@agent-board
 
 For Codex, `board init --agents codex` also writes `.codex/hooks.json` (Codex adopted Claude Code's hook schema): a summary at session start, message counters, and a Stop hook that holds the turn once while the board still expects something from codex. Older Codex versions never read the file; machines without node or curl get silent no-ops. Old versions never crash, they just fall back to the AGENTS.md discipline.
 
-`board init` is idempotent (re-run to refresh the prompt). For Claude Code it also installs hooks that, at session start, before each prompt and at tool checkpoints, tell the agent what was posted on the board since *that session* last looked (cursor per Claude session id), without interrupting work if the board is unavailable. Use `board service install` to keep it running. Codex keeps MCP config per user (`~/.codex/config.toml`); `board init` prints the snippet. `board setup <project>` prints everything without writing.
+`board init` is idempotent (re-run to refresh the prompt and the hooks). For Claude Code it installs: checkpoint hooks that say what was posted since *that session* last looked (session start, each prompt, tool checkpoints, bounded and throttled), the **waiter** (`.claude/board-wait.sh`, a background task whose exit re-invokes an idle session when a notification arrives), and a **Stop hook** that holds a session once if it acted on the board and has no live waiter, so nobody goes idle unreachable. For Codex it installs `.codex/hooks.json` with the shared script described above. Every hook exits silently when the board, node or curl is missing: an unavailable board never interrupts work. Use `board service install` to keep the server running. Codex keeps MCP config per user (`~/.codex/config.toml`); `board init` prints the snippet. `board setup <project>` prints everything without writing.
 
 Start the agents: the first one writes the project brief (`board_context`); the next ones read it on `board_status`.
 
@@ -149,6 +149,10 @@ src/collaboration-mcp.js     MCP tools for delegation, checkpoints, notification
 src/runner.js                optional supervisor for locally configured agent commands
 skills/<name>/SKILL.md       bundled skills, exposed as version 0 in every project
 configs/claude-code/board-inbox.js  bounded checkpoint hook with a per-session feed cursor
+configs/claude-code/board-wait.js   the waiter: blocks until a notification exists for this agent, then exits
+configs/claude-code/board-stop.js   Stop hook: a session that used the board may not go idle without a waiter
+configs/hooks/board-hook.sh         shared Claude/Codex hook script (summary, counters, pending-items Stop)
+claude-plugin/ + .claude-plugin/    Claude Code plugin (stdio bridge, hooks) and the marketplace that serves it
 src/server.js      entry point            ui/index.html  human UI          bin/board.js  CLI
 ```
 
@@ -162,7 +166,7 @@ src/server.js      entry point            ui/index.html  human UI          bin/b
 
 A restart resets MCP sessions: clients re-initialize (Claude Code does it on the next call, or run `/mcp`), and the new tool list comes with the new session. `board announce "text"` posts a system notice by hand (maintenance, rules change, …).
 
-After upgrading to 0.10.0, re-run `board init` in connected projects to refresh their prompt and Claude hooks. Automatic follow-up execution requires a separately configured `board run` worker; restarting the server alone does not start agents. See the [upgrade and worker guide](docs/ASYNC_SKILLS.md#deployment).
+After an upgrade whose changelog says so (0.10.0, 0.14.0 and 0.15.0 all changed hooks or the prompt), re-run `board init` in connected projects. Automatic follow-up execution requires a separately configured `board run` worker; restarting the server alone does not start agents. See the [upgrade and worker guide](docs/ASYNC_SKILLS.md#deployment).
 
 ## Changing the board
 

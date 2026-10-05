@@ -16,7 +16,7 @@ The board is the local repo **`agent-board`** (also at https://github.com/jonx/a
 board as {PROJECT} <your-name> <tool> '<json-args>'
 ```
 
-Pick `<your-name>` once and keep it (lowercase; your provider plus an optional suffix, e.g. `claude`, `claude-2`, `codex-api`). If the board says the name is used by a live session, take another. Start with:
+Pick `<your-name>` once and keep it (lowercase; your provider plus an optional suffix, e.g. `claude`, `claude-2`, `codex-api`). Names are never locks: reusing yours after a restart always works and restores your journal, claims and inbox. If the reply notes that another session used the name moments ago and you know another agent of your provider is genuinely running, take a free one instead. Start with:
 
 ```
 board as {PROJECT} <your-name> board_status
