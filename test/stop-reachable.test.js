@@ -5,7 +5,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -29,8 +29,12 @@ function transcript(lines) {
 }
 const liveWaiter = (project, agent) =>
   writeFileSync(join(waiters, `${project}.${agent}`), String(process.pid));
-const deadWaiter = (project, agent) =>
-  writeFileSync(join(waiters, `${project}.${agent}`), '2147480000');
+const deadWaiter = (project, agent) => {
+  // A dead waiter's pid is gone AND its heartbeat is stale: it stopped rewriting the file.
+  const f = join(waiters, `${project}.${agent}`);
+  writeFileSync(f, '2147480000');
+  const old = (Date.now() - 5 * 60_000) / 1000; utimesSync(f, old, old);
+};
 
 async function hook(project, input) {
   const child = execFile(process.execPath, [HOOK, project, '/repo'], { env });

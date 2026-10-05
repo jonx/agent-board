@@ -31,3 +31,31 @@ test('garbage pids are dead, not errors', () => {
   assert.equal(pidAlive(0), false);
   assert.equal(pidAlive(-5), false);
 });
+
+import { mkdtempSync, writeFileSync, existsSync, utimesSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { waiterFileAlive, releaseIfMine } from '../configs/claude-code/liveness.js';
+
+test('a waiter ending never deletes the file of the waiter that replaced it', (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'live-')); t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const f = join(dir, 'proj.claude');
+  // Waiter A (an older pid) started first, then waiter B overwrote the file with its pid.
+  writeFileSync(f, String(process.pid));
+  releaseIfMine(f, 999999);                       // A exits: the file names B, so it stays
+  assert.equal(existsSync(f), true);
+  releaseIfMine(f, process.pid);                  // B exits: its own file goes
+  assert.equal(existsSync(f), false);
+});
+
+test('a fresh heartbeat proves life even when the pid cannot be checked', (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'live-')); t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const f = join(dir, 'proj.claude');
+  writeFileSync(f, '2147480000');                 // a pid nobody has
+  assert.equal(waiterFileAlive(f), true, 'just written: the waiter is polling');
+  const old = (Date.now() - 5 * 60_000) / 1000;
+  utimesSync(f, old, old);
+  assert.equal(waiterFileAlive(f), false, 'stale heartbeat and no process: dead');
+  writeFileSync(f, String(process.pid)); utimesSync(f, old, old);
+  assert.equal(waiterFileAlive(f), true, 'a live process counts whatever the file age');
+});

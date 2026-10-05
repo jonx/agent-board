@@ -3,7 +3,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtempSync, rmSync, readFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync, existsSync, mkdirSync, writeFileSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -93,6 +93,8 @@ test('the inbox hook says so when nothing is listening', async () => {
   writeFileSync(join(dir, 'demo.claude-hooked'), String(process.pid));
   assert.doesNotMatch(await run({}), /NOT reachable/, 'a live waiter silences the warning');
   writeFileSync(join(dir, 'demo.claude-dead'), '999999');
+  // A dead waiter stops touching its file, so its heartbeat goes stale: age it like reality does.
+  { const old = (Date.now() - 5 * 60_000) / 1000; utimesSync(join(dir, 'demo.claude-dead'), old, old); }
   rmSync(join(dir, 'demo.claude-hooked'), { force: true });
   assert.match(await run({}), /NOT reachable/, 'a stale file from a dead waiter does not count');
 });

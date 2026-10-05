@@ -1,4 +1,5 @@
-import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { releaseIfMine } from './liveness.js';
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 // Wakes an idle agent session: prints what this agent has not read, then blocks
@@ -23,7 +24,7 @@ const pending = async () => {
 const alive = join(tmpdir(), 'agent-board-waiters', `${project}.${agent}`.replace(/[^A-Za-z0-9._-]/g, '_'));
 mkdirSync(dirname(alive), { recursive: true });
 const touch = () => { try { writeFileSync(alive, String(process.pid)); } catch {} };
-const forget = () => { try { rmSync(alive, { force: true }); } catch {} };
+const forget = () => releaseIfMine(alive);   // never delete another waiter's file
 touch();
 for (const s of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(s, () => { forget(); process.exit(0); });
 process.on('exit', forget);
