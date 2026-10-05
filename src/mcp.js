@@ -74,14 +74,19 @@ export function buildMcpServer(store, ctx) {
   };
 
   const contextThread = () => store.db.prepare(`SELECT id FROM threads WHERE project_id = ? AND kind = 'status' AND title = ?`).get(pid, CONTEXT_THREAD_TITLE);
+  let briefSentFull = false;   // the full brief once per session; afterwards a stub saves tokens
   const latestContext = () => {
     const t = contextThread(); if (!t) return null;
     const msgs = store.threadMessages(t.id); const last = msgs[msgs.length - 1];
-    return last ? { thread_id: t.id, updated_at: last.created_at, by: last.author, body: last.body } : null;
+    if (!last) return null;
+    const full = !briefSentFull; briefSentFull = true;
+    return { thread_id: t.id, updated_at: last.created_at, by: last.author,
+      body: full || last.body.length <= 400 ? last.body : last.body.slice(0, 400) + ` [truncated; board_read ${t.id} for the full brief]` };
   };
-  const recentJournal = (limit = 8) => store.db.prepare(`
-      SELECT m.body, m.created_at, a.name AS author FROM messages m JOIN threads t ON t.id = m.thread_id JOIN agents a ON a.id = m.author_id
-      WHERE t.project_id = ? AND t.kind = 'status' AND t.title <> ? ORDER BY m.id DESC LIMIT ?`).all(pid, CONTEXT_THREAD_TITLE, limit).reverse();
+
+  const recentJournal = (limit = 5) => store.db.prepare(`
+      SELECT substr(m.body, 1, 200) AS body, m.created_at, a.name AS author FROM messages m JOIN threads t ON t.id = m.thread_id JOIN agents a ON a.id = m.author_id
+      WHERE t.project_id = ? AND t.kind = 'status' AND t.title <> ? AND m.kind <> 'system' ORDER BY m.id DESC LIMIT ?`).all(pid, CONTEXT_THREAD_TITLE, limit).reverse();
 
   const suggestName = () => {
     const taken = new Set(store.listAgents().map(a => a.name));
